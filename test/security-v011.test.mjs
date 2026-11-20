@@ -84,7 +84,7 @@ function createInMemoryBridgeHarness(bridgeOptions = {}) {
 test('H-01: pre-opened Relay leg caps lease to remaining admission window, rejects double renewal, and expires idle legs', async () => {
   const { bridge, secret, hostSent, openLeg } = createInMemoryBridgeHarness({
     leaseMs: 2000,
-    authTimeoutMs: 140,
+    authTimeoutMs: 250,
     p2p: 'off',
   });
   try {
@@ -92,24 +92,25 @@ test('H-01: pre-opened Relay leg caps lease to remaining admission window, rejec
     const c1 = generateLogicalSessionId();
     await openLeg(1, c1, 2000);
     assert.equal(bridge.relayLegs.has(1), true);
-    await new Promise((r) => setTimeout(r, 175));
+    await new Promise((r) => setTimeout(r, 310));
     assert.equal(bridge.relayLegs.has(1), false);
 
-    // 2. Leg opened with only 220ms remaining cannot grant a 2000ms lease after waiting 70ms.
-    const c2 = generateLogicalSessionId();
-    await openLeg(2, c2, 220);
-    await new Promise((r) => setTimeout(r, 70));
+    // 2. Leg opened with only 320ms remaining cannot grant a 2000ms lease after waiting 70ms.
+    // Precompute client handshake outside the leg's auth timeout window to avoid CPU-load flakes.
     const logicalSessionId = generateLogicalSessionId();
     const hs = await createClientHandshake(secret, {
       hostId: 'host-sec', webId: 'web-1', ownerUserId: 'usr-1', tenantId: 'ten-1', logicalSessionId,
     });
+    const c2 = generateLogicalSessionId();
+    await openLeg(2, c2, 320);
+    await new Promise((r) => setTimeout(r, 70));
     await bridge.handleFrame({
       sessionId: 2, streamId: 0, msgType: MSG_E2EE_CLIENT_HELLO, payload: hs.helloPayload,
     });
     const session = bridge.sessions.get(logicalSessionId);
     assert.ok(session, 'session established');
     const remainingAfterHandshake = session.transport.expiresAt - Date.now();
-    assert.ok(remainingAfterHandshake <= 170, `expected capped lease <= 170ms, got ${remainingAfterHandshake}ms`);
+    assert.ok(remainingAfterHandshake <= 270, `expected capped lease <= 270ms, got ${remainingAfterHandshake}ms`);
 
     // Verify HostBridge notified Relay of session_authenticated for sid=2.
     const authedCtrl = hostSent.find((f) => f.sessionId === 0 && f.msgType === MSG_CONTROL_JSON &&

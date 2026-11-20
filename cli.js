@@ -44,9 +44,9 @@ function printHelp() {
   console.log(`dsh-remote — Expose DeepSeek Harness via Tiana (zero platform changes, E2EE)
 
 Usage:
-  dsh-remote connect --app <appIdOrUrl> [options]
+  dsh-remote connect --web <webIdOrUrl> [options]
                                   Bind this machine to an installed Tiana DSH Remote app (zero recompile)
-    --app <appIdOrUrl>            Tiana Web App ID or URL (alias: --web)
+    --web <webIdOrUrl>            Tiana Web App ID or URL (alias: --app)
     --space <tenantId>            Target Tiana space ID
     --profile <name>              DSH profile name (default: web)
     --port <port>                 Local DSH port (default: 3080)

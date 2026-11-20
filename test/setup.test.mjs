@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { generateE2eeSecret, loadRemoteState, saveRemoteState } from '../src/state.js';
 import {
   bindTianaRemoteWeb,
+  getWebFunctionBinding,
   provisionTianaRemote,
   updateRemotePolicy,
   validateRelayFunctionShown,
@@ -23,27 +24,62 @@ function writeMockTiana(binary, dir, opts = {}) {
   const webDeletionPending = opts.webDeletionPending ?? false;
   const failParamsGet = Boolean(opts.failParamsGet);
   const omitOwnerId = Boolean(opts.omitOwnerId);
+  const hasExplicitOwnerId = Object.prototype.hasOwnProperty.call(opts, 'ownerId');
+  const ownerIdValue = hasExplicitOwnerId ? opts.ownerId : 'fixture-user';
+  const omitTenantId = Boolean(opts.omitTenantId);
+  const hasExplicitTenantId = Object.prototype.hasOwnProperty.call(opts, 'tenantId');
+  const tenantIdValue = hasExplicitTenantId ? opts.tenantId : 'fixture-tenant';
+  const hasSpace = Object.prototype.hasOwnProperty.call(opts, 'spaceCanManage');
+  const hasWebCanManage = Object.prototype.hasOwnProperty.call(opts, 'webCanManage');
+  const webCanManageSequence = Array.isArray(opts.webCanManageSequence) ? opts.webCanManageSequence : null;
+  const webFunctionIds = Array.isArray(opts.webFunctionIds) ? opts.webFunctionIds : ['fixture-function'];
+  const webListEmpty = Boolean(opts.webListEmpty);
+  const rotateKeyDshHomeOnTokenCreate = opts.rotateKeyDshHomeOnTokenCreate || '';
   writeFileSync(binary, `#!${process.execPath}
+const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const dir = __dirname;
 const args = process.argv.slice(2);
+const overrideFile = path.join(dir, 'mock-override.json');
+const overrides = fs.existsSync(overrideFile) ? JSON.parse(fs.readFileSync(overrideFile, 'utf8')) : {};
 const web = {
   id: 'fixture00001',
-  ${omitOwnerId ? '' : "owner_id: 'fixture-user',"}
-  tenant_id: 'fixture-tenant',
+  ${omitOwnerId ? '' : `owner_id: ${JSON.stringify(ownerIdValue)},`}
+  ${omitTenantId ? '' : `tenant_id: ${JSON.stringify(tenantIdValue)},`}
   enabled: ${JSON.stringify(webEnabled)},
   deletion_pending: ${JSON.stringify(webDeletionPending)},
   endpoint: 'https://fixture.invalid/web/fixture00001/'
 };
+if (Object.prototype.hasOwnProperty.call(overrides, 'ownerId')) web.owner_id = overrides.ownerId;
+if (Object.prototype.hasOwnProperty.call(overrides, 'tenantId')) web.tenant_id = overrides.tenantId;
+if (Object.prototype.hasOwnProperty.call(overrides, 'webEnabled')) web.enabled = overrides.webEnabled;
 const save = path.join(dir, 'submitted-source.go');
 const published = path.join(dir, 'published');
+const fnCreatedFile = path.join(dir, 'function-created.json');
+const tokenMintedFile = path.join(dir, 'token-minted.json');
 const paramsFile = path.join(dir, 'function-params.json');
+const webBindingFile = path.join(dir, 'web-binding-written.json');
+const webPublishedFile = path.join(dir, 'web-published.json');
+const getCountFile = path.join(dir, 'web-functions-get-count.txt');
 let data;
 if (args[0] === 'status') {
-  data = {logged_in:true, user:{user_id:'fixture-user',tenant_id:'fixture-tenant',email:'owner@example.test'}};
+  data = {
+    logged_in: true,
+    user: {
+      user_id: overrides.userId || 'fixture-user',
+      tenant_id: overrides.statusTenantId || 'fixture-tenant',
+      email: 'owner@example.test',
+    },
+    ${hasSpace ? `space: { tenant_id: overrides.statusTenantId || 'fixture-tenant', role: 'owner', can_manage: ${JSON.stringify(opts.spaceCanManage)} },` : ''}
+  };
 } else if (args[0] === 'web' && args[1] === 'list') {
-  data = {items:[web]};
+  data = {items: ${JSON.stringify(webListEmpty)} ? [] : [web]};
+} else if (args[0] === 'web' && args[1] === 'create') {
+  data = { project: web };
+} else if (args[0] === 'function' && args[1] === 'create') {
+  fs.writeFileSync(fnCreatedFile, JSON.stringify({ args }));
+  data = { instance_id: 'fixture-function' };
 } else if (args[0] === 'function' && args[1] === 'show') {
   if (args[2] !== 'fixture-function') process.exit(5);
   data = {
@@ -89,12 +125,33 @@ if (args[0] === 'status') {
   data = {ok:true};
 } else if (args.slice(0,2).join(' ') === 'token create') {
   if (Number(args[args.indexOf('--expires-at') + 1]) <= Date.now()/1000) process.exit(5);
+  fs.writeFileSync(tokenMintedFile, JSON.stringify({ args }));
+  const rotateDshHome = ${JSON.stringify(rotateKeyDshHomeOnTokenCreate)};
+  if (rotateDshHome) {
+    const out = cp.execFileSync(process.execPath, [${JSON.stringify(join(PROJECT_ROOT, 'cli.js'))}, 'key', '--rotate', '--json', '--print-key'], {
+      env: { ...process.env, DSH_HOME: rotateDshHome },
+      encoding: 'utf8',
+    });
+    fs.writeFileSync(path.join(dir, 'concurrent-key-rotate.json'), out);
+  }
   data = {token:'fixture-new-token',token_id:'fixture-new-id'};
 } else if (args.slice(0,3).join(' ') === 'web functions get') {
-  data = {function_instance_ids:['fixture-function'], project_revision: 1};
+  const seq = ${JSON.stringify(webCanManageSequence)};
+  let cm = ${hasWebCanManage ? JSON.stringify(opts.webCanManage) : 'undefined'};
+  if (Array.isArray(seq)) {
+    const idx = fs.existsSync(getCountFile) ? Number(fs.readFileSync(getCountFile, 'utf8')) : 0;
+    fs.writeFileSync(getCountFile, String(idx + 1));
+    cm = seq[Math.min(idx, seq.length - 1)];
+  }
+  data = { web_id: 'fixture00001', function_instance_ids: ${JSON.stringify(webFunctionIds)}, project_revision: 1 };
+  if (cm !== undefined) data.can_manage = cm;
+} else if (args.slice(0,3).join(' ') === 'web functions set') {
+  fs.writeFileSync(webBindingFile, JSON.stringify({ args }));
+  data = { ok: true };
 } else if (args.slice(0,2).join(' ') === 'web publish') {
   const dist = args[args.indexOf('--dir') + 1];
   fs.copyFileSync(path.join(dist, 'remote-config.json'), path.join(__dirname, 'remote-config.json'));
+  fs.writeFileSync(webPublishedFile, JSON.stringify({ status: 'verified-by-fixture' }));
   data = {status:'verified-by-fixture'};
 } else {
   process.exit(5);
@@ -427,5 +484,491 @@ test('bindTianaRemoteWeb enforces strict parameter read, owner_id, ACTIVE functi
     assert.equal(existsSync(join(dir, 'function-params.json')), false, 'cloud policy must not be modified when /healthz fails');
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTianaRemoteWeb and provisionTianaRemote (fail-closed on negative cases)', async () => {
+  const webId = 'fixture00001';
+
+  // Positive case: Online payload (owner_id: "", matching tenant_id, space.can_manage: true, web functions get can_manage: true)
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-online-ok-'));
+    const binary = join(dir, 'tiana');
+    const bindStatePath = join(dir, 'bind-state.json');
+    const setupStatePath = join(dir, 'setup-state.json');
+    try {
+      writeMockTiana(binary, dir, {
+        ownerId: '',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManage: true,
+      });
+
+      const binding = await getWebFunctionBinding(webId, { bin: binary });
+      assert.equal(binding.canManage, true);
+
+      const bound = await bindTianaRemoteWeb({
+        webId,
+        hostId: 'online-host',
+        hostName: 'Online Host',
+        statePath: bindStatePath,
+        tianaBin: binary,
+        probeRelayHealth: async () => ({ ok: true, paired: false }),
+        log: () => {},
+      });
+      assert.equal(bound.web.id, webId);
+      assert.equal(bound.owner.userId, 'fixture-user');
+      assert.equal(bound.owner.tenantId, 'fixture-tenant');
+      assert.equal(existsSync(join(dir, 'function-params.json')), true);
+
+      // Fresh setup (web create returning owner_id: "" + matching tenant_id + can_manage: true)
+      const provisioned = await provisionTianaRemote({
+        hostId: 'online-setup-host',
+        hostName: 'Online Setup Host',
+        statePath: setupStatePath,
+        tianaBin: binary,
+        log: () => {},
+      });
+      assert.equal(provisioned.web.id, webId);
+      assert.equal(provisioned.owner.userId, 'fixture-user');
+      assert.equal(provisioned.owner.tenantId, 'fixture-tenant');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // Negative cases: MUST reject fail-closed BEFORE touching Relay parameters or local state
+  const negativeCases = [
+    {
+      name: 'empty owner_id + matching tenant_id + web can_manage: false',
+      opts: { ownerId: '', tenantId: 'fixture-tenant', spaceCanManage: true, webCanManage: false },
+    },
+    {
+      name: 'empty owner_id + matching tenant_id + missing web can_manage',
+      opts: { ownerId: '', tenantId: 'fixture-tenant', spaceCanManage: true },
+    },
+    {
+      name: 'empty owner_id + matching tenant_id + space.can_manage: false despite web can_manage: true',
+      opts: { ownerId: '', tenantId: 'fixture-tenant', spaceCanManage: false, webCanManage: true },
+    },
+    {
+      name: 'empty owner_id + missing tenant_id despite can_manage: true',
+      opts: { ownerId: '', omitTenantId: true, spaceCanManage: true, webCanManage: true },
+    },
+    {
+      name: 'empty owner_id + mismatched tenant_id despite can_manage: true',
+      opts: { ownerId: '', tenantId: 'other-tenant', spaceCanManage: true, webCanManage: true },
+    },
+    {
+      name: 'non-empty mismatched owner_id despite matching tenant_id and can_manage: true',
+      opts: { ownerId: 'other-user', tenantId: 'fixture-tenant', spaceCanManage: true, webCanManage: true },
+    },
+  ];
+
+  for (const tc of negativeCases) {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-online-neg-'));
+    const binary = join(dir, 'tiana');
+    const bindStatePath = join(dir, 'bind-state.json');
+    const setupStatePath = join(dir, 'setup-state.json');
+    const initialSetupState = {
+      version: 2,
+      owner: { userId: 'fixture-user', tenantId: 'fixture-tenant' },
+      host: { hostId: 'neg-host', hostName: 'Neg Host' },
+      web: { id: webId, endpoint: 'https://fixture.invalid/web/fixture00001/' },
+      function: { id: 'fixture-function', token: 'existing-tok' },
+      e2ee: { secret: generateE2eeSecret() },
+    };
+    saveRemoteState(initialSetupState, setupStatePath);
+    const setupBefore = readFileSync(setupStatePath, 'utf8');
+    try {
+      writeMockTiana(binary, dir, tc.opts);
+
+      await assert.rejects(
+        () => bindTianaRemoteWeb({
+          webId,
+          hostId: 'neg-host',
+          statePath: bindStatePath,
+          tianaBin: binary,
+          probeRelayHealth: async () => ({ ok: true, paired: false }),
+          log: () => {},
+        }),
+        /owner/iu,
+        `bindTianaRemoteWeb must reject: ${tc.name}`,
+      );
+      assert.equal(existsSync(join(dir, 'function-params.json')), false, `bind must not touch Relay params: ${tc.name}`);
+      assert.equal(existsSync(bindStatePath), false, `bind must not create local state: ${tc.name}`);
+
+      await assert.rejects(
+        () => provisionTianaRemote({
+          hostId: 'neg-host',
+          statePath: setupStatePath,
+          tianaBin: binary,
+          log: () => {},
+        }),
+        /owner/iu,
+        `provisionTianaRemote must reject: ${tc.name}`,
+      );
+      assert.equal(existsSync(join(dir, 'function-params.json')), false, `setup must not touch Relay params: ${tc.name}`);
+      assert.equal(readFileSync(setupStatePath, 'utf8'), setupBefore, `setup must not mutate local state: ${tc.name}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // Locked re-verification: can_manage revoked between pre-check and locked bind -> reject before parameter write
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-online-revoked-'));
+    const binary = join(dir, 'tiana');
+    const statePath = join(dir, 'state.json');
+    try {
+      writeMockTiana(binary, dir, {
+        ownerId: '',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManageSequence: [true, false],
+      });
+      await assert.rejects(
+        () => bindTianaRemoteWeb({
+          webId,
+          hostId: 'revoked-host',
+          statePath,
+          tianaBin: binary,
+          probeRelayHealth: async () => ({ ok: true, paired: false }),
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      assert.equal(existsSync(join(dir, 'function-params.json')), false, 'revoked can_manage under lock must block Relay params write');
+      assert.equal(existsSync(statePath), false, 'revoked can_manage under lock must block local state write');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // R8-2: bind (connect), webApp.owner_id initially "" then becomes explicit mismatch before locked recheck while can_manage stays true
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-r8-2-owner-flip-'));
+    const binary = join(dir, 'tiana');
+    const statePath = join(dir, 'state.json');
+    try {
+      writeMockTiana(binary, dir, {
+        ownerId: '',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManage: true,
+      });
+      await assert.rejects(
+        () => bindTianaRemoteWeb({
+          webId,
+          hostId: 'owner-flip-host',
+          statePath,
+          tianaBin: binary,
+          probeRelayHealth: async () => {
+            // Simulate Web gaining an explicit mismatching owner before bind acquires its lock
+            writeFileSync(join(dir, 'mock-override.json'), JSON.stringify({ ownerId: 'other-owner' }));
+            return { ok: true, paired: false };
+          },
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      assert.equal(existsSync(join(dir, 'function-params.json')), false, 'R8-2: mismatched owner under lock must block Relay params write');
+      assert.equal(existsSync(statePath), false, 'R8-2: mismatched owner under lock must leave state.json absent');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // R8-1a: setup NEW web, management revoked (can_manage: [true, false]) before binding/policy commit
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-r8-1-setup-new-'));
+    const binary = join(dir, 'tiana');
+    const statePath = join(dir, 'state.json');
+    try {
+      writeMockTiana(binary, dir, {
+        ownerId: '',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManageSequence: [true, false],
+        webFunctionIds: [],
+      });
+      await assert.rejects(
+        () => provisionTianaRemote({
+          hostId: 'setup-new-revoked',
+          statePath,
+          tianaBin: binary,
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      assert.equal(existsSync(join(dir, 'published')), false, 'R10-1 new web: must not publish Relay when revoked after initial check');
+      assert.equal(existsSync(join(dir, 'token-minted.json')), false, 'R10-1 new web: must not mint token when revoked after initial check');
+      assert.equal(existsSync(join(dir, 'function-params.json')), false, 'R8-1 new web: must not write DSH_REMOTE_POLICY');
+      assert.equal(existsSync(join(dir, 'web-binding-written.json')), false, 'R8-1 new web: must not write web binding');
+      assert.equal(existsSync(join(dir, 'web-published.json')), false, 'R8-1 new web: must not publish web');
+      assert.equal(existsSync(statePath), false, 'R8-1 new web: state.json must remain absent (no pendingSetup left behind)');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // R8-1b & R10-1: setup REUSED web, management revoked (can_manage: [true, false]) before Relay publish / binding commit
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-r8-1-setup-reused-'));
+    const binary = join(dir, 'tiana');
+    const statePath = join(dir, 'state.json');
+    saveRemoteState({
+      version: 2,
+      owner: { userId: 'fixture-user', tenantId: 'fixture-tenant' },
+      host: { hostId: 'setup-reused-revoked', hostName: 'Reused Host' },
+      web: { id: webId, endpoint: 'https://fixture.invalid/web/fixture00001/' },
+      function: { id: 'fixture-function', token: 'existing-tok' },
+      e2ee: { secret: generateE2eeSecret() },
+    }, statePath);
+    const stateBefore = readFileSync(statePath, 'utf8');
+    try {
+      writeMockTiana(binary, dir, {
+        ownerId: '',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManageSequence: [true, false],
+      });
+      await assert.rejects(
+        () => provisionTianaRemote({
+          hostId: 'setup-reused-revoked',
+          statePath,
+          tianaBin: binary,
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      assert.equal(existsSync(join(dir, 'published')), false, 'R10-1 reused web: must not publish Relay when revoked after initial check');
+      assert.equal(existsSync(join(dir, 'token-minted.json')), false, 'R10-1 reused web: must not mint token when revoked after initial check');
+      assert.equal(existsSync(join(dir, 'function-params.json')), false, 'R8-1 reused web: must not write DSH_REMOTE_POLICY');
+      assert.equal(existsSync(join(dir, 'web-binding-written.json')), false, 'R8-1 reused web: must not write web binding');
+      assert.equal(existsSync(join(dir, 'web-published.json')), false, 'R8-1 reused web: must not publish web');
+      assert.equal(readFileSync(statePath, 'utf8'), stateBefore, 'R8-1 reused web: state.json must remain byte-for-byte unchanged');
+      assert.equal(loadRemoteState(statePath).pendingSetup, undefined, 'R8-1 reused web: pendingSetup must not persist');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // R9-1 & R10-1: fresh setup with matching owner_id in web create, empty post-build web list, and can_manage: false -> rejects during preflight before Relay creation/publish/token
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-r9-1-empty-list-'));
+    const binary = join(dir, 'tiana');
+    const statePath = join(dir, 'state.json');
+    try {
+      writeMockTiana(binary, dir, {
+        ownerId: 'fixture-user',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webListEmpty: true,
+        webCanManage: false,
+        webFunctionIds: [],
+      });
+      await assert.rejects(
+        () => provisionTianaRemote({
+          hostId: 'r9-1-host',
+          statePath,
+          tianaBin: binary,
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      assert.equal(existsSync(join(dir, 'function-created.json')), false, 'R10-1: must not create Function when constant can_manage: false');
+      assert.equal(existsSync(join(dir, 'published')), false, 'R10-1: must not publish Relay when constant can_manage: false');
+      assert.equal(existsSync(join(dir, 'token-minted.json')), false, 'R10-1: must not mint token when constant can_manage: false');
+      assert.equal(existsSync(join(dir, 'function-params.json')), false, 'R9-1: must not write DSH_REMOTE_POLICY');
+      assert.equal(existsSync(join(dir, 'web-binding-written.json')), false, 'R9-1: must not write web binding');
+      assert.equal(existsSync(join(dir, 'web-published.json')), false, 'R9-1: must not publish web');
+      assert.equal(existsSync(statePath), false, 'R9-1: state.json must remain absent');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // R10-1: matching non-empty owner_id, constant can_manage: false (new Web & reused Web) -> rejects in preflight with zero Relay mutations
+  {
+    const dirNew = mkdtempSync(join(tmpdir(), 'dsh-remote-r10-1-const-deny-new-'));
+    const binaryNew = join(dirNew, 'tiana');
+    const statePathNew = join(dirNew, 'state.json');
+    try {
+      writeMockTiana(binaryNew, dirNew, {
+        ownerId: 'fixture-user',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManage: false,
+        webFunctionIds: [],
+      });
+      await assert.rejects(
+        () => provisionTianaRemote({
+          hostId: 'r10-1-new',
+          statePath: statePathNew,
+          tianaBin: binaryNew,
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      assert.equal(existsSync(join(dirNew, 'function-created.json')), false);
+      assert.equal(existsSync(join(dirNew, 'published')), false);
+      assert.equal(existsSync(join(dirNew, 'token-minted.json')), false);
+      assert.equal(existsSync(join(dirNew, 'function-params.json')), false);
+      assert.equal(existsSync(statePathNew), false);
+    } finally {
+      rmSync(dirNew, { recursive: true, force: true });
+    }
+
+    const dirReused = mkdtempSync(join(tmpdir(), 'dsh-remote-r10-1-const-deny-reused-'));
+    const binaryReused = join(dirReused, 'tiana');
+    const statePathReused = join(dirReused, 'state.json');
+    saveRemoteState({
+      version: 2,
+      owner: { userId: 'fixture-user', tenantId: 'fixture-tenant' },
+      host: { hostId: 'r10-1-reused', hostName: 'Reused Host' },
+      web: { id: webId, endpoint: 'https://fixture.invalid/web/fixture00001/' },
+      function: { id: 'fixture-function', token: 'existing-tok' },
+      e2ee: { secret: generateE2eeSecret() },
+    }, statePathReused);
+    const beforeReused = readFileSync(statePathReused, 'utf8');
+    try {
+      writeMockTiana(binaryReused, dirReused, {
+        ownerId: 'fixture-user',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManage: false,
+      });
+      await assert.rejects(
+        () => provisionTianaRemote({
+          hostId: 'r10-1-reused',
+          statePath: statePathReused,
+          tianaBin: binaryReused,
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      assert.equal(existsSync(join(dirReused, 'function-created.json')), false);
+      assert.equal(existsSync(join(dirReused, 'published')), false);
+      assert.equal(existsSync(join(dirReused, 'token-minted.json')), false);
+      assert.equal(existsSync(join(dirReused, 'function-params.json')), false);
+      assert.equal(readFileSync(statePathReused, 'utf8'), beforeReused);
+    } finally {
+      rmSync(dirReused, { recursive: true, force: true });
+    }
+  }
+
+  // R9-2a: setup denial with concurrent `cli.js key --rotate` on initially absent state.json -> rotated key preserved, pendingSetup removed
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-r9-2-new-rotate-'));
+    const dshHome = join(dir, 'dsh-home');
+    mkdirSync(join(dshHome, 'tiana-remote'), { recursive: true, mode: 0o700 });
+    const statePath = join(dshHome, 'tiana-remote', 'state.json');
+    const binary = join(dir, 'tiana');
+    try {
+      writeMockTiana(binary, dir, {
+        ownerId: '',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManageSequence: [true, true, false],
+        webFunctionIds: [],
+        rotateKeyDshHomeOnTokenCreate: dshHome,
+      });
+      await assert.rejects(
+        () => provisionTianaRemote({
+          hostId: 'r9-2-new-host',
+          statePath,
+          tianaBin: binary,
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      const rotated = JSON.parse(readFileSync(join(dir, 'concurrent-key-rotate.json'), 'utf8'));
+      assert.ok(rotated.secret, 'concurrent key --rotate must have succeeded');
+      assert.equal(existsSync(statePath), true, 'R9-2a: state.json must NOT be unlinked when concurrent key rotation wrote e2ee');
+      const after = loadRemoteState(statePath);
+      assert.equal(after.e2ee?.secret, rotated.secret, 'R9-2a: rotated E2EE secret must be preserved');
+      assert.equal(after.pendingSetup, undefined, 'R9-2a: this attempt pendingSetup must be rolled back');
+      assert.equal(existsSync(join(dir, 'function-params.json')), false);
+      assert.equal(existsSync(join(dir, 'web-binding-written.json')), false);
+      assert.equal(existsSync(join(dir, 'web-published.json')), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // R9-2b & R9-3: setup denial with concurrent `cli.js key --rotate` on preexisting state.json with earlier pendingSetup
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-r9-2-reused-rotate-'));
+    const dshHome = join(dir, 'dsh-home');
+    mkdirSync(join(dshHome, 'tiana-remote'), { recursive: true, mode: 0o700 });
+    const statePath = join(dshHome, 'tiana-remote', 'state.json');
+    const binary = join(dir, 'tiana');
+    const priorPending = {
+      webId,
+      functionId: 'fixture-function',
+      hostId: 'r9-2-reused-host',
+      owner: { userId: 'fixture-user', tenantId: 'fixture-tenant' },
+      note: 'preexisting-recovery-record',
+    };
+    const initialSecret = generateE2eeSecret();
+    saveRemoteState({
+      version: 2,
+      owner: { userId: 'fixture-user', tenantId: 'fixture-tenant' },
+      host: { hostId: 'r9-2-reused-host', hostName: 'Reused Host' },
+      web: { id: webId, endpoint: 'https://fixture.invalid/web/fixture00001/' },
+      function: { id: 'fixture-function', token: 'existing-tok' },
+      e2ee: { secret: initialSecret },
+      pendingSetup: priorPending,
+    }, statePath);
+    try {
+      // First verify without concurrent edits: preexisting state (including preexisting pendingSetup) stays byte-identical
+      const bytesBefore = readFileSync(statePath, 'utf8');
+      writeMockTiana(binary, dir, {
+        ownerId: '',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManageSequence: [true, true, false],
+      });
+      await assert.rejects(
+        () => provisionTianaRemote({
+          hostId: 'r9-2-reused-host',
+          statePath,
+          tianaBin: binary,
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      assert.equal(readFileSync(statePath, 'utf8'), bytesBefore, 'R9-3: without concurrent edits state.json must remain byte-identical via atomic restore');
+
+      // Now verify WITH concurrent `cli.js key --rotate`: BOTH rotated key AND preexisting pendingSetup survive
+      rmSync(join(dir, 'web-functions-get-count.txt'), { force: true });
+      writeMockTiana(binary, dir, {
+        ownerId: '',
+        tenantId: 'fixture-tenant',
+        spaceCanManage: true,
+        webCanManageSequence: [true, true, false],
+        rotateKeyDshHomeOnTokenCreate: dshHome,
+      });
+      await assert.rejects(
+        () => provisionTianaRemote({
+          hostId: 'r9-2-reused-host',
+          statePath,
+          tianaBin: binary,
+          log: () => {},
+        }),
+        /owner/iu,
+      );
+      const rotated = JSON.parse(readFileSync(join(dir, 'concurrent-key-rotate.json'), 'utf8'));
+      assert.ok(rotated.secret && rotated.secret !== initialSecret, 'concurrent key --rotate must rotate key');
+      const after = loadRemoteState(statePath);
+      assert.equal(after.e2ee?.secret, rotated.secret, 'R9-2b: concurrent rotated key must be preserved');
+      assert.deepEqual(after.pendingSetup, priorPending, 'R9-2b: preexisting pendingSetup recovery record must be restored');
+      assert.equal(existsSync(join(dir, 'function-params.json')), false);
+      assert.equal(existsSync(join(dir, 'web-binding-written.json')), false);
+      assert.equal(existsSync(join(dir, 'web-published.json')), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });

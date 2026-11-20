@@ -1636,3 +1636,195 @@ test('R4-3: README.md accurately documents checked-by-default localStorage, memo
   assert.ok(readme.includes('`: keepalive\\n`'), 'README must document single-line SSE keepalive comment');
   assert.equal(readme.includes('`: keepalive\\n\\n`'), false, 'README must not claim double-newline SSE keepalive');
 });
+
+test('connect accepts canonical --web and --app alias, and binds Online empty owner_id via tenant_id + can_manage proof', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-online-connect-'));
+  try {
+    // 1. Canonical --web and alias --app both parse cleanly, with --web taking precedence when both supplied
+    let seenWebId = '';
+    const secret = generateE2eeSecret();
+    const mkDeps = () => ({
+      nodeVersion: '24.9.0',
+      log: () => {},
+      resolveDsh: async () => ({ bin: '/usr/local/bin/dsh', version: '0.2.2' }),
+      ensurePlugins: async () => {},
+      ensureTianaToolchain: async () => ({ bin: '/usr/local/bin/tiana', version: '1.0.34' }),
+      ensureLogin: async () => ({ logged_in: true }),
+      readRuntime: () => ({ pid: process.pid, origin: 'http://127.0.0.1:3080' }),
+      checkDshResponsive: async () => true,
+      bindRemoteWeb: async (opts) => {
+        seenWebId = opts.webId;
+        return {
+          host: { hostId: 'my-mac', hostName: 'My Mac' },
+          e2ee: { secret, fingerprint: 'aa:bb:cc' },
+          web: { id: opts.webId, endpoint: `https://${opts.webId}.tianacloud.site/web/${opts.webId}/` },
+        };
+      },
+      copyToClipboard: async () => ({ ok: true, tool: 'pbcopy' }),
+      openBrowser: () => true,
+    });
+
+    await runConnect({ web: 'webcanon0001', noStart: true, noOpen: true, noClipboard: true }, mkDeps());
+    assert.equal(seenWebId, 'webcanon0001');
+    await runConnect({ app: 'appalias0002', noStart: true, noOpen: true, noClipboard: true }, mkDeps());
+    assert.equal(seenWebId, 'appalias0002');
+    await runConnect({ web: 'webcanon0001', app: 'appalias0002', noStart: true, noOpen: true, noClipboard: true }, mkDeps());
+    assert.equal(seenWebId, 'webcanon0001');
+
+    // 2. Real bindTianaRemoteWeb through runConnect with Online empty owner_id + can_manage: true / false
+    const makeOnlineCli = (binPath, { ownerId, tenantId, spaceCanManage, webCanManage }) => {
+      writeFileSync(binPath, `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = __dirname;
+const args = process.argv.slice(2);
+const paramsFile = path.join(dir, path.basename(process.argv[1]) + '-params.json');
+let data;
+if (args[0] === 'status') {
+  data = {
+    logged_in: true,
+    user: { user_id: 'usr-online-1', tenant_id: 'ten-online-1', email: 'owner@example.test' },
+    space: { tenant_id: 'ten-online-1', role: 'owner', can_manage: ${JSON.stringify(spaceCanManage)} },
+  };
+} else if (args[0] === 'web' && args[1] === 'list') {
+  data = {
+    items: [{
+      id: 'onlineapp001',
+      owner_id: ${JSON.stringify(ownerId)},
+      tenant_id: ${JSON.stringify(tenantId)},
+      enabled: true,
+      deletion_pending: false,
+      endpoint: 'https://onlineapp001.tianacloud.site/web/onlineapp001/',
+    }],
+  };
+} else if (args.slice(0, 3).join(' ') === 'web functions get') {
+  data = {
+    web_id: 'onlineapp001',
+    function_instance_ids: ['fn-online-1'],
+    project_revision: 3,
+    can_manage: ${JSON.stringify(webCanManage)},
+  };
+} else if (args[0] === 'function' && args[1] === 'show') {
+  data = {
+    instance: {
+      id: 'fn-online-1',
+      product_state: 'ACTIVE',
+      enabled: true,
+      deletion_pending: false,
+      connection: { hostname: 'fn-online-1.invalid', url: 'https://fn-online-1.invalid/' },
+    },
+    function: { instance_id: 'fn-online-1' },
+    release: { published: { id: 'rel-1', build_commit: 'bc-1' } },
+  };
+} else if (args[0] === 'token' && args[1] === 'create') {
+  data = { token: 'tok-online-1', token_id: 'tid-online-1' };
+} else if (args.slice(0, 3).join(' ') === 'function parameters get') {
+  data = { parameters: fs.existsSync(paramsFile) ? JSON.parse(fs.readFileSync(paramsFile, 'utf8')) : {} };
+} else if (args.slice(0, 3).join(' ') === 'function parameters set') {
+  fs.copyFileSync(args[args.indexOf('--file') + 1], paramsFile);
+  data = { ok: true };
+} else {
+  process.exit(5);
+}
+console.log(JSON.stringify({ data }));
+`, { mode: 0o700 });
+    };
+
+    const okBin = join(dir, 'tiana-ok');
+    const okState = join(dir, 'state-ok.json');
+    makeOnlineCli(okBin, { ownerId: '', tenantId: 'ten-online-1', spaceCanManage: true, webCanManage: true });
+    const okSummary = await runConnect({
+      web: 'onlineapp001',
+      statePath: okState,
+      noStart: true,
+      noOpen: true,
+      noClipboard: true,
+    }, {
+      nodeVersion: '24.9.0',
+      log: () => {},
+      resolveDsh: async () => ({ bin: '/usr/local/bin/dsh', version: '0.2.2' }),
+      ensurePlugins: async () => {},
+      ensureTianaToolchain: async () => ({ bin: okBin, version: '1.0.34' }),
+      ensureLogin: async () => ({ logged_in: true }),
+      readRuntime: () => ({ pid: process.pid, origin: 'http://127.0.0.1:3080' }),
+      checkDshResponsive: async () => true,
+      bindRemoteWeb: (opts) => bindTianaRemoteWeb({ ...opts, probeRelayHealth: async () => ({ ok: true, paired: false }) }),
+    });
+    assert.equal(okSummary.ok, true);
+    assert.equal(okSummary.webId, 'onlineapp001');
+    assert.equal(existsSync(join(dir, 'tiana-ok-params.json')), true);
+
+    // Negative: can_manage: false rejects before writing params or state
+    const denyBin = join(dir, 'tiana-deny');
+    const denyState = join(dir, 'state-deny.json');
+    makeOnlineCli(denyBin, { ownerId: '', tenantId: 'ten-online-1', spaceCanManage: true, webCanManage: false });
+    await assert.rejects(
+      () => bindTianaRemoteWeb({
+        webId: 'onlineapp001',
+        statePath: denyState,
+        tianaBin: denyBin,
+        probeRelayHealth: async () => ({ ok: true, paired: false }),
+        log: () => {},
+      }),
+      /owner/iu,
+    );
+    assert.equal(existsSync(join(dir, 'tiana-deny-params.json')), false);
+    assert.equal(existsSync(denyState), false);
+
+    // R8-2: concurrent space switch before locked recheck rejects fail-closed without writing params or state
+    const spaceFlipBin = join(dir, 'tiana-space-flip');
+    const spaceFlipState = join(dir, 'state-space-flip.json');
+    const spaceOverrideFile = join(dir, 'space-override.json');
+    writeFileSync(spaceFlipBin, `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const dir = __dirname;
+const args = process.argv.slice(2);
+const ov = fs.existsSync(${JSON.stringify(spaceOverrideFile)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(spaceOverrideFile)}, 'utf8')) : {};
+const paramsFile = path.join(dir, 'tiana-space-flip-params.json');
+let data;
+if (args[0] === 'status') {
+  const tid = ov.tenantId || 'ten-online-1';
+  data = {
+    logged_in: true,
+    user: { user_id: 'usr-online-1', tenant_id: tid, email: 'owner@example.test' },
+    space: { tenant_id: tid, role: 'owner', can_manage: true },
+  };
+} else if (args[0] === 'web' && args[1] === 'list') {
+  data = { items: [{ id: 'onlineapp001', owner_id: ov.ownerId ?? '', tenant_id: 'ten-online-1', enabled: true, endpoint: 'https://onlineapp001.tianacloud.site/web/onlineapp001/' }] };
+} else if (args.slice(0, 3).join(' ') === 'web functions get') {
+  data = { web_id: 'onlineapp001', function_instance_ids: ['fn-online-1'], project_revision: 3, can_manage: true };
+} else if (args[0] === 'function' && args[1] === 'show') {
+  data = { instance: { id: 'fn-online-1', product_state: 'ACTIVE', enabled: true, connection: { url: 'https://fn-online-1.invalid/' } }, function: { instance_id: 'fn-online-1' }, release: { published: { id: 'rel-1', build_commit: 'bc-1' } } };
+} else if (args[0] === 'token' && args[1] === 'create') {
+  data = { token: 'tok-online-1', token_id: 'tid-online-1' };
+} else if (args.slice(0, 3).join(' ') === 'function parameters get') {
+  data = { parameters: {} };
+} else if (args.slice(0, 3).join(' ') === 'function parameters set') {
+  fs.copyFileSync(args[args.indexOf('--file') + 1], paramsFile);
+  data = { ok: true };
+} else {
+  process.exit(5);
+}
+console.log(JSON.stringify({ data }));
+`, { mode: 0o700 });
+    await assert.rejects(
+      () => bindTianaRemoteWeb({
+        webId: 'onlineapp001',
+        spaceId: 'ten-online-1',
+        statePath: spaceFlipState,
+        tianaBin: spaceFlipBin,
+        probeRelayHealth: async () => {
+          writeFileSync(spaceOverrideFile, JSON.stringify({ tenantId: 'ten-other-space' }));
+          return { ok: true, paired: false };
+        },
+        log: () => {},
+      }),
+      /owner/iu,
+    );
+    assert.equal(existsSync(join(dir, 'tiana-space-flip-params.json')), false);
+    assert.equal(existsSync(spaceFlipState), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

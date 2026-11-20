@@ -45,7 +45,7 @@ function verifyPrivate(stat, type) {
   }
 }
 
-export function loadRemoteState(filePath = defaultStatePath()) {
+export function loadRemoteStateSnapshot(filePath = defaultStatePath()) {
   let fd;
   try {
     verifyPrivate(lstatSync(dirname(filePath)), 'directory');
@@ -58,33 +58,63 @@ export function loadRemoteState(filePath = defaultStatePath()) {
     const info = fstatSync(fd);
     verifyPrivate(info, 'file');
     if (info.size > 256 * 1024) throw new Error('DSH remote state file is too large');
+    const rawBytes = readFileSync(fd);
     let parsed;
-    try { parsed = JSON.parse(readFileSync(fd, 'utf8')); }
+    try { parsed = JSON.parse(rawBytes.toString('utf8')); }
     catch { throw new Error('Invalid DSH remote state file'); }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('Invalid DSH remote state file');
     }
-    return parsed;
+    return { state: parsed, rawBytes };
   } finally {
     closeSync(fd);
   }
 }
 
-export function saveRemoteState(state, filePath = defaultStatePath()) {
+export function loadRemoteState(filePath = defaultStatePath()) {
+  return loadRemoteStateSnapshot(filePath)?.state ?? null;
+}
+
+export function saveRemoteState(state, filePath = defaultStatePath(), options = {}) {
   const dir = dirname(filePath);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   verifyPrivate(lstatSync(dir), 'directory');
+  const next = options?.preserveUpdatedAt === true && typeof state?.updatedAt === 'string' && state.updatedAt
+    ? { ...state, updatedAt: state.updatedAt }
+    : state;
+  const payload = options?.rawBytes !== undefined
+    ? options.rawBytes
+    : `${JSON.stringify(next, null, 2)}\n`;
   const tmp = `${filePath}.tmp.${randomBytes(16).toString('hex')}`;
   const fd = openSync(tmp, 'wx', 0o600);
   try {
     try {
-      writeFileSync(fd, `${JSON.stringify(state, null, 2)}\n`);
+      writeFileSync(fd, payload);
     } finally {
       closeSync(fd);
     }
     renameSync(tmp, filePath);
   } catch (err) {
     try { unlinkSync(tmp); } catch { /* preserve original error */ }
+    throw err;
+  }
+}
+
+export function removeRemoteState(filePath = defaultStatePath()) {
+  let info;
+  try {
+    verifyPrivate(lstatSync(dirname(filePath)), 'directory');
+    info = lstatSync(filePath);
+  } catch (err) {
+    if (err?.code === 'ENOENT') return false;
+    throw err;
+  }
+  verifyPrivate(info, 'file');
+  try {
+    unlinkSync(filePath);
+    return true;
+  } catch (err) {
+    if (err?.code === 'ENOENT') return false;
     throw err;
   }
 }

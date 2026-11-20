@@ -425,9 +425,9 @@ export async function runConnect(options = {}, deps = {}) {
     throw err;
   }
 
-  const webId = parseAppArg(options.app || options.web);
+  const webId = parseAppArg(options.web || options.app);
   if (!webId) {
-    throw new Error('Provide --app <appIdOrUrl> (or --web <webId>) for the Tiana DSH Remote app.');
+    throw new Error('Provide --web <webIdOrUrl> (or --app <appIdOrUrl>) for the Tiana DSH Remote app.');
   }
 
   const profile = options.profile || 'web';
