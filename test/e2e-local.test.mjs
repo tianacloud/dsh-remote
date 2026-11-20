@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -205,6 +205,19 @@ test('local E2E: Relay + HostBridge enforces E2EE, encrypts HTTP/bootstrap/WS, r
   const e2eeSecret = generateE2eeSecret();
   const wrongSecret = generateE2eeSecret();
 
+  // Hermetic synthetic @deepseek-ai/dsh-web-frontend fixture (no host ~/.dsh dependency in CI)
+  const frontendDir = join(tmpDir, 'dsh-web-frontend');
+  mkdirSync(join(frontendDir, 'dist', 'assets'), { recursive: true });
+  writeFileSync(
+    join(frontendDir, 'dist', 'index.html'),
+    '<!doctype html><link rel="stylesheet" href="./assets/app.css"><script type="module" src="./assets/index.js"></script>',
+  );
+  writeFileSync(join(frontendDir, 'dist', 'assets', 'app.css'), 'body{margin:0}');
+  writeFileSync(
+    join(frontendDir, 'dist', 'assets', 'index.js'),
+    'const __e = new Function("ctx","expr",`return eval(expr)`); const __p=function(load,deps){let p=Promise.resolve();if(deps){new Event("vite:preloadError")}return p.then(()=>{return load().catch(err)})}; void __e; void __p;',
+  );
+
   const bridge = new HostBridge({
     relayUrl: relayHttp,
     e2eeSecret,
@@ -214,6 +227,7 @@ test('local E2E: Relay + HostBridge enforces E2EE, encrypts HTTP/bootstrap/WS, r
     hostName: 'Test Host',
     localOrigin: `http://127.0.0.1:${dshPort}`,
     getLaunchToken: () => 'launch-secret',
+    frontendOptions: { frontend: frontendDir },
     collectIndexInjections: () => [
       { kind: 'global', name: '__DSH_BOOT__', value: { entries: [], batches: [], release: { version: 'fixture' }, rev: 'fixture' } },
       { kind: 'script', placement: 'body', text: 'const preference = "dark"; document.documentElement.dataset.dsThemeSource = preference;' },
