@@ -137,14 +137,14 @@ function cleanBundle(file) {
   return Buffer.from(readFile(file).toString('utf8').replace(/\r?\n\/\/# source(?:Mapping)?URL=[^\r\n]*/gu, ''));
 }
 
-const BUILTIN_CLIENT_PREFIX = '@deepseek-ai/dsh-client-';
+const BUILTIN_CLIENT_PREFIX = '@deepseek-ai/dsh-';
 const SELF_CLIENT_MODULE = '@tianacloud/dsh-remote';
 
 /**
  * Select which active DSH client modules are exposed over the remote tunnel.
  * - `allowlist: ['*']` (or `'*'`): allow all active modules.
  * - `allowlist: []` (default) or omitted: allow ONLY builtin DSH core modules
- *   (`@deepseek-ai/dsh-client-*`) plus `@tianacloud/dsh-remote` itself; third-party plugins are blocked.
+ *   (`@deepseek-ai/dsh-*`) plus `@tianacloud/dsh-remote` itself; third-party plugins are blocked.
  * - Explicit IDs: allow builtin core + `@tianacloud/dsh-remote` + exact allowlisted active plugins.
  */
 export function selectAllowedWebPlugins(modules, allowlist) {

@@ -12,6 +12,7 @@ import { createHostController } from '../host-main.js';
 import { scanWorktreeAndGitHistory } from '../scripts/pack-plugin.mjs';
 import { copyToClipboard, maskPairingKey } from '../src/clipboard.js';
 import {
+  buildDshStartArgs,
   checkNodeVersion,
   ensureDshPlugins,
   ensureTianaToolchain,
@@ -577,29 +578,37 @@ test('Round 2 #1: real HTTP webServer.register enforces loopback socket, loopbac
   }
 });
 
-test('Round 2 #6: empty allowedWebPlugins [] blocks third-party plugins while keeping core + dsh-remote; "*" allows all', () => {
+test('Round 2 #6: empty allowedWebPlugins [] blocks third-party plugins while keeping @deepseek-ai/dsh-* core + dsh-remote; "*" allows all', () => {
+  const corePackages = [
+    '@deepseek-ai/dsh-client-modules',
+    '@deepseek-ai/dsh-client-ui-layout',
+    '@deepseek-ai/dsh-api-remotes',
+    '@deepseek-ai/dsh-typert-registry',
+    '@deepseek-ai/dsh-api-gateway',
+    '@deepseek-ai/dsh-api-session-controller',
+    '@deepseek-ai/dsh-api-workspace-controller',
+    '@deepseek-ai/dsh-api-remote-access',
+    '@deepseek-ai/dsh-api-job-controller',
+    '@deepseek-ai/dsh-api-terminal-controller',
+    '@deepseek-ai/dsh-api-workspace-files',
+    '@deepseek-ai/dsh-cordis-client-runner',
+    '@deepseek-ai/dsh-message-quotes',
+    '@deepseek-ai/dsh-session-log-export',
+  ];
   const modules = new Map([
-    ['@deepseek-ai/dsh-client-modules', {}],
-    ['@deepseek-ai/dsh-client-ui-layout', {}],
+    ...corePackages.map((id) => [id, {}]),
     ['@tianacloud/dsh-remote', {}],
-    ['@acme/third-party-a', {}],
-    ['@acme/third-party-b', {}],
+    ['@acme/custom-plugin', {}],
+    ['community-plugin', {}],
   ]);
 
   const emptySel = [...selectAllowedWebPlugins(modules, [])].sort();
-  assert.deepEqual(emptySel, [
-    '@deepseek-ai/dsh-client-modules',
-    '@deepseek-ai/dsh-client-ui-layout',
-    '@tianacloud/dsh-remote',
-  ]);
+  assert.deepEqual(emptySel, [...corePackages, '@tianacloud/dsh-remote'].sort());
+  assert.equal(emptySel.includes('@acme/custom-plugin'), false);
+  assert.equal(emptySel.includes('community-plugin'), false);
 
-  const explicitSel = [...selectAllowedWebPlugins(modules, ['@acme/third-party-a'])].sort();
-  assert.deepEqual(explicitSel, [
-    '@acme/third-party-a',
-    '@deepseek-ai/dsh-client-modules',
-    '@deepseek-ai/dsh-client-ui-layout',
-    '@tianacloud/dsh-remote',
-  ]);
+  const explicitSel = [...selectAllowedWebPlugins(modules, ['@acme/custom-plugin'])].sort();
+  assert.deepEqual(explicitSel, [...corePackages, '@tianacloud/dsh-remote', '@acme/custom-plugin'].sort());
 
   const starSel = [...selectAllowedWebPlugins(modules, ['*'])].sort();
   assert.deepEqual(starSel, [...modules.keys()].sort());
@@ -1824,6 +1833,85 @@ console.log(JSON.stringify({ data }));
     );
     assert.equal(existsSync(join(dir, 'tiana-space-flip-params.json')), false);
     assert.equal(existsSync(spaceFlipState), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('v0.2.3 P0 regressions: dsh cold-start never passes positional "web" with --profile, and host-main excludes @deepseek-ai/dsh-* from third-party list', async () => {
+  // 1. P0 Bug #1: buildDshStartArgs and runConnect cold-start spawn args
+  const defaultArgs = buildDshStartArgs({ profile: 'web', port: 3080 });
+  assert.deepEqual(defaultArgs, ['--profile', 'web', '--port', '3080', '--no-open']);
+  assert.equal(defaultArgs[0], '--profile', 'must never pass positional "web" alongside --profile');
+
+  const spawnedCalls = [];
+  const secret = generateE2eeSecret();
+  const res = await runConnect({
+    web: 'coldstart001',
+    profile: 'web',
+    port: '4123',
+    noOpen: true,
+    noClipboard: true,
+  }, {
+    nodeVersion: '24.9.0',
+    log: () => {},
+    resolveDsh: async () => ({ bin: '/usr/local/bin/dsh', version: '0.2.2-rc.5' }),
+    ensurePlugins: async () => {},
+    ensureTianaToolchain: async () => ({ bin: '/usr/local/bin/tiana', version: '1.0.34' }),
+    ensureLogin: async () => ({ logged_in: true }),
+    readRuntime: () => null,
+    bindRemoteWeb: async (opts) => ({
+      host: { hostId: 'cold-host', hostName: 'Cold Host' },
+      e2ee: { secret, fingerprint: 'aa:bb:cc' },
+      web: { id: opts.webId, endpoint: `https://${opts.webId}.tianacloud.site/web/${opts.webId}/` },
+    }),
+    spawnFn: (bin, args) => {
+      spawnedCalls.push({ bin, args });
+      return { on() {}, unref() {} };
+    },
+    fetchFn: async () => Response.json({ configured: true }),
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.dshStarted, true);
+  assert.equal(spawnedCalls.length, 1);
+  assert.equal(spawnedCalls[0].bin, '/usr/local/bin/dsh');
+  assert.deepEqual(spawnedCalls[0].args, ['--profile', 'web', '--port', '4123', '--no-open']);
+  assert.equal(spawnedCalls[0].args.filter((a) => a === 'web').length, 1, 'profile "web" must appear only once as --profile value');
+
+  // 2. P0 Bug #2: host-main availableWebPlugins treats @deepseek-ai/dsh-* as built-in core, listing only third-party plugins
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-v023-plugins-'));
+  try {
+    const statePath = join(dir, 'state.json');
+    const runtimePath = join(dir, 'runtime.json');
+    const mockWebServer = {
+      async collectIndexInjections() {
+        return [{
+          kind: 'global',
+          name: '__DSH_BOOT__',
+          value: {
+            entries: [
+              { id: '@deepseek-ai/dsh-client-modules' },
+              { id: '@deepseek-ai/dsh-api-remotes' },
+              { id: '@deepseek-ai/dsh-typert-registry' },
+              { id: '@deepseek-ai/dsh-api-gateway' },
+              { id: '@tianacloud/dsh-remote' },
+              { id: '@acme/custom-plugin' },
+              { id: 'community-plugin' },
+            ],
+          },
+        }];
+      },
+    };
+    const controller = createHostController({
+      statePath,
+      runtimePath,
+      log: () => {},
+      getWebServer: () => mockWebServer,
+      getConnection: () => ({ browserPeer: {} }),
+    });
+    const overview = await controller.getAdminOverview();
+    assert.deepEqual(overview.installedWebPlugins.sort(), ['@acme/custom-plugin', 'community-plugin']);
+    controller.dispose();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

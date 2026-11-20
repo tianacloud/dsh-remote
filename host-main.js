@@ -223,7 +223,7 @@ export function createHostController(options = {}) {
       if (!Array.isArray(graph?.entries)) return [];
       return graph.entries
         .map((e) => e.id)
-        .filter((id) => typeof id === 'string' && !id.startsWith('@deepseek-ai/dsh-client-') && id !== '@tianacloud/dsh-remote');
+        .filter((id) => typeof id === 'string' && !id.startsWith('@deepseek-ai/dsh-') && id !== '@tianacloud/dsh-remote');
     } catch {
       return [];
     }

@@ -394,6 +394,10 @@ export async function isLocalDshResponsive(origin, { fetchFn = fetch, timeoutMs 
   }
 }
 
+export function buildDshStartArgs({ profile = 'web', port = 3080 } = {}) {
+  return ['--profile', String(profile || 'web'), '--port', String(port), '--no-open'];
+}
+
 export async function waitForLocalDshReady(port, timeoutMs = 15_000, { childState = null, fetchFn = fetch } = {}) {
   const deadline = Date.now() + timeoutMs;
   const origin = `http://127.0.0.1:${port}`;
@@ -508,9 +512,11 @@ export async function runConnect(options = {}, deps = {}) {
     if (deps.startDsh) {
       dshStarted = await deps.startDsh(dshInfo.bin, { profile, port });
     } else {
-      log(`[dsh-remote] Starting local DSH (${dshInfo.bin} web --port ${port} --no-open)...`);
+      const spawnFn = deps.spawnFn ?? spawn;
+      const startArgs = buildDshStartArgs({ profile, port });
+      log(`[dsh-remote] Starting local DSH (${dshInfo.bin} ${startArgs.join(' ')})...`);
       const childState = { error: null, exited: false, exitCode: null };
-      const child = spawn(dshInfo.bin, ['web', '--profile', profile, '--port', String(port), '--no-open'], {
+      const child = spawnFn(dshInfo.bin, startArgs, {
         stdio: 'ignore',
         detached: true,
         windowsHide: true,
