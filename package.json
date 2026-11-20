@@ -1,0 +1,91 @@
+{
+  "name": "@tianacloud/dsh-remote",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "使用 Tiana 能力为 DeepSeek Harness 提供零公网 IP 远程访问、侧栏管理面板、无密钥流式子资源桥接与云端一键引导插件。",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tianacloud/dsh-remote"
+  },
+  "author": {
+    "name": "Tiana Cloud",
+    "url": "https://github.com/tianacloud"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "tiana",
+    "tianacloud",
+    "remote-access",
+    "webrtc",
+    "e2ee"
+  ],
+  "main": "./host-main.js",
+  "client": "./client.js",
+  "icon": "./icon.svg",
+  "bin": {
+    "dsh-remote": "./cli.js"
+  },
+  "exports": {
+    ".": "./host-main.js",
+    "./host": "./host-main.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./icon.svg": "./icon.svg"
+  },
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.2-rc.1"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "build:web": "node scripts/build-web-dist.mjs",
+    "prepack": "node scripts/build-web-dist.mjs .dist-tweb/prepack-check",
+    "pack:check": "npm pack --dry-run",
+    "test:pack": "node scripts/pack-plugin.mjs --verify",
+    "connect": "node cli.js connect",
+    "setup": "node cli.js setup",
+    "start": "node cli.js start",
+    "status": "node cli.js status"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "files": [
+    "cli.js",
+    "client.js",
+    "cordis.patch.yml",
+    "host-main.js",
+    "icon.svg",
+    "locale",
+    "relay-go/go.mod",
+    "relay-go/main.go",
+    "scripts/build-web-dist.mjs",
+    "src",
+    "web-src",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "es-module-lexer": "2.1.0",
+    "werift": "0.28.0"
+  }
+}

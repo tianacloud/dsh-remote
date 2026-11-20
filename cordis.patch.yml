@@ -1,0 +1,3 @@
+- insert:
+    - id: tiana-remote
+      name: '@tianacloud/dsh-remote'
