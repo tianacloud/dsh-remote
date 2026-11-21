@@ -32,7 +32,16 @@ import {
   encodeJSON,
   MSG_CONTROL_JSON,
 } from '../src/protocol.js';
-import { createRemoteApiHandler, isLoopbackAddress, isLoopbackHostHeader, registerRemoteRoutes, registerWebServerRoutes } from '../src/remote-api.js';
+import {
+  createRemoteApiHandler,
+  guardAdminRequest,
+  isLoopbackAddress,
+  isLoopbackHostHeader,
+  isPrivateOrLocalAddress,
+  isValidHostHeader,
+  registerRemoteRoutes,
+  registerWebServerRoutes,
+} from '../src/remote-api.js';
 import {
   formatPairingKey,
   generateE2eeSecret,
@@ -479,6 +488,8 @@ test('Round 2 #1: real HTTP webServer.register enforces loopback socket, loopbac
   // Simulate real DSH rc.5 connection.requestRejection returning numeric 401/403 or undefined on Node IncomingMessage
   const mockConnection = {
     requestRejection(req) {
+      const host = String(req.headers?.host || '');
+      if (!isLoopbackHostHeader(host)) return 403;
       const cookie = String(req.headers?.cookie || '');
       if (cookie.includes('dsh_owner=valid')) return undefined;
       return 401;
@@ -1915,4 +1926,506 @@ test('v0.2.3 P0 regressions: dsh cold-start never passes positional "web" with -
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('v0.2.4: isPrivateOrLocalAddress accepts all standard local/private/Tailnet ranges and rejects boundaries and public IPs', () => {
+  const allowed = [
+    // Loopback
+    '127.0.0.1',
+    '127.0.0.2',
+    '127.255.255.254',
+    '::1',
+    '[::1]',
+    '::ffff:127.0.0.1',
+    '::ffff:7f00:0001',
+    // RFC 1918 Private LAN
+    '10.0.0.1',
+    '10.255.255.254',
+    '172.16.0.1',
+    '172.31.255.254',
+    '192.168.0.1',
+    '192.168.1.50',
+    '192.168.255.254',
+    // RFC 6598 CGNAT / Tailscale
+    '100.64.0.1',
+    '100.98.45.17',
+    '100.127.255.254',
+    // Link-Local
+    '169.254.0.1',
+    '169.254.1.1',
+    '169.254.255.254',
+    'fe80::1',
+    'fe80::1%eth0',
+    'fe80::1%eth0:1',
+    '[fe80::1%eth0]',
+    'febf:ffff::1',
+    // IPv6 ULA (including Tailscale fd7a::)
+    'fc00::1',
+    'fd7a:115c:a1e0::1',
+    'fdff:ffff::1',
+    // IPv4-mapped IPv6 private / Tailscale (dotted-quad and hex)
+    '::ffff:192.168.1.10',
+    '::ffff:100.98.45.17',
+    '::ffff:c0a8:010a',
+    '0:0:0:0:0:ffff:10.0.0.5',
+    '::FFFF:100.98.45.17',
+  ];
+  for (const addr of allowed) {
+    assert.equal(isPrivateOrLocalAddress(addr), true, `expected ${JSON.stringify(addr)} to be allowed`);
+  }
+
+  const rejected = [
+    // Exact range boundaries
+    '100.63.255.255',
+    '100.128.0.0',
+    '172.15.255.255',
+    '172.32.0.0',
+    '192.167.255.255',
+    '192.169.0.0',
+    '169.253.255.255',
+    '169.255.0.0',
+    'fbff:ffff::1',
+    'fe00::1',
+    'fec0::1',
+    // Public IPv4 / IPv6 & IPv4-mapped public
+    '8.8.8.8',
+    '1.1.1.1',
+    '203.0.113.5',
+    '2001:4860:4860::8888',
+    '::ffff:8.8.8.8',
+    '::ffff:0808:0808',
+    '0:0:0:0:0:ffff:0808:0808',
+    // Unspecified, multicast, broadcast, empty, malformed
+    '0.0.0.0',
+    '::',
+    '224.0.0.1',
+    'ff02::1',
+    '255.255.255.255',
+    '',
+    '   ',
+    ' 10.0.0.1 ',
+    ' 127.0.0.1 ',
+    null,
+    undefined,
+    'not-an-ip',
+    '127.0.0.256',
+    '010.0.0.1',
+    '127.0.0.1%eth0',
+    'fe80::1%',
+    '[::1',
+    '::1]',
+  ];
+  for (const addr of rejected) {
+    assert.equal(isPrivateOrLocalAddress(addr), false, `expected ${JSON.stringify(addr)} to be rejected`);
+  }
+});
+
+test('v0.2.4: guardAdminRequest supports Tailnet/LAN with DSH requestRejection, fails closed without it, and supports HTTP/2 :authority', async () => {
+  const stubController = {
+    async getAdminOverview() {
+      return { ok: true, configured: true, enabled: true };
+    },
+  };
+  const tailnetHost = 'workstation.tailnet.example.test:3080';
+  const trustedHosts = new Set([tailnetHost, '192.168.1.20:3080']);
+  const dshConnection = {
+    seenHosts: [],
+    requestRejection(req) {
+      const host = req.headers instanceof Headers
+        ? (req.headers.get('host') || '')
+        : String(req.headers?.host || '');
+      const cookie = req.headers instanceof Headers
+        ? (req.headers.get('cookie') || '')
+        : String(req.headers?.cookie || '');
+      this.seenHosts.push(host);
+      if (!isLoopbackHostHeader(host) && !trustedHosts.has(host)) return 403;
+      if (!cookie.includes('dsh_web=owner-ok')) return 401;
+      return null;
+    },
+  };
+  const api = createRemoteApiHandler(stubController, dshConnection);
+
+  // 1. Tailnet IP + trusted Host + valid owner cookie -> 200
+  const tailnetOk = await api(
+    new Request(`https://${tailnetHost}/api/tiana-remote/admin/overview`, {
+      headers: { host: tailnetHost, cookie: 'dsh_web=owner-ok' },
+    }),
+    { remoteAddress: '100.98.45.17', hostHeader: tailnetHost },
+  );
+  assert.equal(tailnetOk.status, 200);
+
+  // 2. LAN IP + trusted Host + valid owner cookie -> 200
+  const lanOk = await api(
+    new Request('http://192.168.1.20:3080/api/tiana-remote/admin/overview', {
+      headers: { host: '192.168.1.20:3080', cookie: 'dsh_web=owner-ok' },
+    }),
+    { remoteAddress: '192.168.1.20', hostHeader: '192.168.1.20:3080' },
+  );
+  assert.equal(lanOk.status, 200);
+
+  // 3. Tailscale IPv6 ULA + trusted Host + valid owner cookie -> 200
+  const ulaOk = await api(
+    new Request(`https://${tailnetHost}/api/tiana-remote/admin/overview`, {
+      headers: { host: tailnetHost, cookie: 'dsh_web=owner-ok' },
+    }),
+    { remoteAddress: 'fd7a:115c:a1e0::1', hostHeader: tailnetHost },
+  );
+  assert.equal(ulaOk.status, 200);
+
+  // 4. Tailnet IP when connection.requestRejection rejects (untrusted host or missing cookie) -> 403
+  const untrustedHost = await api(
+    new Request('https://evil.example.test:3080/api/tiana-remote/admin/overview', {
+      headers: { host: 'evil.example.test:3080', cookie: 'dsh_web=owner-ok' },
+    }),
+    { remoteAddress: '100.98.45.17', hostHeader: 'evil.example.test:3080' },
+  );
+  assert.equal(untrustedHost.status, 403);
+
+  const missingCookie = await api(
+    new Request(`https://${tailnetHost}/api/tiana-remote/admin/overview`, {
+      headers: { host: tailnetHost },
+    }),
+    { remoteAddress: '100.98.45.17', hostHeader: tailnetHost },
+  );
+  assert.equal(missingCookie.status, 403);
+
+  // 5. Tailnet/LAN IP when connection is null (no requestRejection) -> fail-closed 403
+  const noConnApi = createRemoteApiHandler(stubController, null);
+  const tailnetNoConn = await noConnApi(
+    new Request(`https://${tailnetHost}/api/tiana-remote/admin/overview`, {
+      headers: { host: tailnetHost, cookie: 'dsh_web=owner-ok' },
+    }),
+    { remoteAddress: '100.98.45.17', hostHeader: tailnetHost },
+  );
+  assert.equal(tailnetNoConn.status, 403);
+
+  const loopbackNonLoopbackHostNoConn = await noConnApi(
+    new Request(`https://${tailnetHost}/api/tiana-remote/admin/overview`, {
+      headers: { host: tailnetHost, cookie: 'dsh_web=owner-ok' },
+    }),
+    { remoteAddress: '127.0.0.1', hostHeader: tailnetHost },
+  );
+  assert.equal(loopbackNonLoopbackHostNoConn.status, 403);
+
+  // 6. Public IP even with valid connection.requestRejection returning null -> 403
+  const permissiveConn = { requestRejection: () => null };
+  const publicIpReject = await guardAdminRequest(
+    new Request(`https://${tailnetHost}/api/tiana-remote/admin/overview`, {
+      headers: { host: tailnetHost, cookie: 'dsh_web=owner-ok' },
+    }),
+    permissiveConn,
+    { remoteAddress: '8.8.8.8', hostHeader: tailnetHost },
+  );
+  assert.equal(publicIpReject?.status, 403);
+
+  // 7. X-DSH-Remote-Tunnel header (including empty string) -> 403 on both loopback and Tailnet
+  for (const [ip, host] of [
+    ['127.0.0.1', '127.0.0.1:3080'],
+    ['100.98.45.17', tailnetHost],
+  ]) {
+    for (const val of ['1', '']) {
+      const tunReject = await guardAdminRequest(
+        new Request(`http://${host}/api/tiana-remote/admin/overview`, {
+          headers: { host, cookie: 'dsh_web=owner-ok', 'x-dsh-remote-tunnel': val },
+        }),
+        dshConnection,
+        { remoteAddress: ip, hostHeader: host },
+      );
+      assert.equal(tunReject?.status, 403);
+    }
+  }
+
+  // 8. Malformed Host headers -> 403
+  for (const badHost of [
+    '',
+    '   ',
+    ' 127.0.0.1:3080',
+    'bad host:3080',
+    `user@${tailnetHost}`,
+    'workstation.tailnet.example.test/path',
+    'workstation.tailnet.example.test?q=1',
+    'workstation.tailnet.example.test#frag',
+    'workstation.tailnet.example.test\\evil',
+    'workstation.tailnet.example.test:',
+    'workstation.tailnet.example.test:notaport',
+  ]) {
+    assert.equal(isValidHostHeader(badHost), false, `expected Host ${JSON.stringify(badHost)} invalid`);
+    const badRes = await guardAdminRequest(
+      new Request('http://127.0.0.1/api/tiana-remote/admin/overview', {
+        headers: { cookie: 'dsh_web=owner-ok' },
+      }),
+      dshConnection,
+      { remoteAddress: '100.98.45.17', hostHeader: badHost },
+    );
+    assert.equal(badRes?.status, 403, `expected 403 for malformed Host ${JSON.stringify(badHost)}`);
+  }
+
+  // 9. registerWebServerRoutes handles HTTP/2 :authority pseudo-header without throwing on Headers.set
+  const routes = [];
+  registerWebServerRoutes(
+    { register(r) { routes.push(r); return () => {}; } },
+    dshConnection,
+    stubController,
+  );
+  const adminRoute = routes.find((r) => r.path === '/api/tiana-remote/admin');
+  const h2Res = {
+    statusCode: 0,
+    headers: {},
+    body: '',
+    headersSent: false,
+    setHeader(k, v) { this.headers[k.toLowerCase()] = v; },
+    end(buf) { this.headersSent = true; this.body = buf ? Buffer.from(buf).toString('utf8') : ''; },
+  };
+  const h2Req = {
+    method: 'GET',
+    url: '/api/tiana-remote/admin/overview',
+    headers: {
+      ':method': 'GET',
+      ':scheme': 'https',
+      ':path': '/api/tiana-remote/admin/overview',
+      ':authority': tailnetHost,
+      cookie: 'dsh_web=owner-ok',
+    },
+    socket: { remoteAddress: '100.98.45.17' },
+  };
+  await adminRoute.handler(h2Req, h2Res);
+  assert.equal(h2Res.statusCode, 200);
+  assert.equal(JSON.parse(h2Res.body).configured, true);
+  assert.equal(dshConnection.seenHosts.at(-1), tailnetHost);
+
+  // 10. Conflicting Host and :authority headers -> 403
+  const conflictRes = await guardAdminRequest(
+    new Request(`https://${tailnetHost}/api/tiana-remote/admin/overview`, {
+      headers: { cookie: 'dsh_web=owner-ok' },
+    }),
+    dshConnection,
+    {
+      remoteAddress: '100.98.45.17',
+      nodeReq: {
+        headers: {
+          host: tailnetHost,
+          ':authority': 'evil.example.test:3080',
+          cookie: 'dsh_web=owner-ok',
+        },
+      },
+    },
+  );
+  assert.equal(conflictRes?.status, 403);
+});
+
+test('v0.2.4: client.js renders explicit error card on admin 403 instead of onboarding form, recovers on retry, and uses theme-aware primary button contrast', async () => {
+  const clientCode = readFileSync(join(PROJECT_ROOT, 'client.js'), 'utf8');
+  const appendedStyles = [];
+  const fakeDoc = {
+    getElementById: (id) => appendedStyles.find((el) => el.id === id) || null,
+    createElement: (tag) => ({ tag, id: '', textContent: '' }),
+    head: { appendChild: (el) => appendedStyles.push(el) },
+  };
+
+  let fetchResponder = async () => new Response(
+    JSON.stringify({ ok: false, error: 'Admin endpoints require local or private network access' }),
+    { status: 403, headers: { 'content-type': 'application/json' } },
+  );
+
+  const timers = [];
+  const sandbox = {
+    globalThis: {},
+    TextEncoder,
+    document: fakeDoc,
+    navigator: { language: 'zh-CN' },
+    fetch: (url, opts) => fetchResponder(url, opts),
+    setInterval: (fn) => { timers.push(fn); return timers.length; },
+    clearInterval: () => {},
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+  };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(clientCode, sandbox);
+
+  // Minimal deterministic React hook runner for TianaRemotePanel
+  const states = [];
+  const refs = [];
+  const effects = [];
+  let cursor = 0;
+  let refCursor = 0;
+  let effectCursor = 0;
+  const miniReact = {
+    createElement(type, props, ...children) {
+      return { type, props: props || {}, children: children.flat(Infinity).filter((c) => c !== null && c !== undefined && c !== false) };
+    },
+    useState(init) {
+      const idx = cursor++;
+      if (!(idx in states)) states[idx] = typeof init === 'function' ? init() : init;
+      return [states[idx], (next) => { states[idx] = typeof next === 'function' ? next(states[idx]) : next; }];
+    },
+    useRef(init) {
+      const idx = refCursor++;
+      if (!(idx in refs)) refs[idx] = { current: init };
+      return refs[idx];
+    },
+    useCallback(fn) { return fn; },
+    useEffect(fn, deps) {
+      const idx = effectCursor++;
+      const prev = effects[idx];
+      const changed = !prev || !deps || deps.length !== prev.deps.length || deps.some((d, i) => !Object.is(d, prev.deps[i]));
+      if (changed) effects[idx] = { fn, deps, pending: true };
+    },
+  };
+
+  const mod = sandbox.__DSH_REMOTE_CLIENT_FACTORY__((id) => (id === 'react' ? miniReact : {}));
+  const renderPanel = () => {
+    cursor = 0;
+    refCursor = 0;
+    effectCursor = 0;
+    return mod.TianaRemotePanel({ forceMode: 'local' });
+  };
+  const flushEffects = async () => {
+    for (const eff of effects) {
+      if (eff?.pending) {
+        eff.pending = false;
+        eff.fn();
+      }
+    }
+    await new Promise((r) => setTimeout(r, 10));
+  };
+
+  const findById = (node, id) => {
+    if (!node || typeof node !== 'object') return null;
+    if (node.props?.id === id) return node;
+    for (const child of node.children || []) {
+      const hit = findById(child, id);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  const collectText = (node) => {
+    if (node === null || node === undefined || typeof node === 'boolean') return '';
+    if (typeof node === 'string' || typeof node === 'number') return String(node);
+    return (node.children || []).map(collectText).join(' ');
+  };
+
+  // Initial render before fetch resolves -> loading card, NOT unconfigured onboarding form
+  const tree0 = renderPanel();
+  assert.ok(findById(tree0, 'dshr-admin-loading-card'), 'initial render should show loading state');
+  assert.equal(findById(tree0, 'dshr-unconfigured-card'), null, 'initial loading must not falsely render onboarding form');
+
+  // Flush useEffect -> 403 response from /api/tiana-remote/admin/overview
+  await flushEffects();
+  const tree403 = renderPanel();
+  const errCard = findById(tree403, 'dshr-admin-error-card');
+  assert.ok(errCard, '403 admin/overview must render explicit error card');
+  assert.equal(findById(tree403, 'dshr-unconfigured-card'), null, '403 must NOT render onboarding bind form');
+  assert.equal(findById(tree403, 'dshr-bind-form'), null, '403 must NOT render bind form');
+  const full403Text = collectText(tree403);
+  assert.ok(full403Text.includes('HTTP 403'), 'error card must show HTTP 403 status');
+  assert.ok(full403Text.includes('Admin endpoints require local or private network access'), 'error card must display server error message');
+  assert.ok(full403Text.includes('访问受限'), 'status pill must show localized access-denied status');
+  assert.equal(full403Text.includes('尚未绑定'), false, '403 must NOT display "尚未绑定"');
+  const retryBtn = findById(tree403, 'dshr-admin-retry-btn');
+  assert.ok(retryBtn, 'error card must render a Retry button');
+
+  // Switch fetch to 200 overview & click Retry -> error card clears and configured panel renders
+  fetchResponder = async () => new Response(
+    JSON.stringify({
+      ok: true,
+      configured: true,
+      enabled: true,
+      host: { hostId: 'workstation-1', hostName: 'Workstation' },
+      web: { id: 'web123456789', endpoint: 'https://web123456789.example.test/web/web123456789/' },
+      e2ee: { fingerprint: '1122:3344:5566' },
+      bridge: { relayConnected: true, sessions: [] },
+      network: { p2pEnabled: true, stunUrls: ['stun:stun.cloudflare.com:3478'] },
+      allowedWebPlugins: [],
+      installedWebPlugins: [],
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
+  retryBtn.props.onClick();
+  await new Promise((r) => setTimeout(r, 10));
+  const tree200 = renderPanel();
+  assert.equal(findById(tree200, 'dshr-admin-error-card'), null, 'error card must clear after 200 retry');
+  assert.equal(findById(tree200, 'dshr-unconfigured-card'), null);
+  assert.ok(collectText(tree200).includes('在线运行中'), 'recovered panel must display Online status');
+
+  // Verify injected CSS uses theme-aware inverted foreground for primary buttons & active tabs (fixes dark-mode white-on-white Open button)
+  assert.equal(appendedStyles.length, 1);
+  const css = appendedStyles[0].textContent;
+  assert.match(css, /\.dshr-btn-primary[\s\S]*a\.dshr-btn-primary[\s\S]*color:\s*var\(--dsw-alias-label-primary-foreground,\s*#ffffff\)/u);
+  assert.match(css, /\.dshr-tab\[aria-selected="true"\][\s\S]*color:\s*var\(--dsw-alias-label-primary-foreground,\s*#ffffff\)/u);
+
+  // Polled 403 after initial 200 { configured: false } switches to #dshr-admin-error-card with Retry and hides bind form
+  assert.equal(isLoopbackAddress(' 127.0.0.1 '), false);
+  const states2 = [];
+  const refs2 = [];
+  const effects2 = [];
+  let c2 = 0;
+  let r2 = 0;
+  let e2 = 0;
+  const pollTimers2 = [];
+  let responder2 = async () => new Response(
+    JSON.stringify({ ok: true, configured: false, enabled: false }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
+  const sb2 = {
+    globalThis: {},
+    TextEncoder,
+    document: {
+      getElementById: () => ({ id: 'dsh-remote-panel-styles' }),
+      createElement: (tag) => ({ tag, id: '', textContent: '' }),
+      head: { appendChild: () => {} },
+    },
+    navigator: { language: 'en-US' },
+    fetch: (url, opts) => responder2(url, opts),
+    setInterval: (fn) => { pollTimers2.push(fn); return pollTimers2.length; },
+    clearInterval: () => {},
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+  };
+  sb2.globalThis = sb2;
+  vm.runInNewContext(clientCode, sb2);
+  const miniReact2 = {
+    createElement: miniReact.createElement,
+    useState(init) {
+      const idx = c2++;
+      if (!(idx in states2)) states2[idx] = typeof init === 'function' ? init() : init;
+      return [states2[idx], (next) => { states2[idx] = typeof next === 'function' ? next(states2[idx]) : next; }];
+    },
+    useRef(init) {
+      const idx = r2++;
+      if (!(idx in refs2)) refs2[idx] = { current: init };
+      return refs2[idx];
+    },
+    useCallback(fn) { return fn; },
+    useEffect(fn, deps) {
+      const idx = e2++;
+      const prev = effects2[idx];
+      const changed = !prev || !deps || deps.length !== prev.deps.length || deps.some((d, i) => !Object.is(d, prev.deps[i]));
+      if (changed) effects2[idx] = { fn, deps, pending: true };
+    },
+  };
+  const mod2 = sb2.__DSH_REMOTE_CLIENT_FACTORY__((id) => (id === 'react' ? miniReact2 : {}));
+  const render2 = () => { c2 = 0; r2 = 0; e2 = 0; return mod2.TianaRemotePanel({ forceMode: 'local' }); };
+  render2();
+  for (const eff of effects2) {
+    if (eff?.pending) { eff.pending = false; eff.fn(); }
+  }
+  await new Promise((r) => setTimeout(r, 10));
+  const treeUnconf = render2();
+  assert.ok(findById(treeUnconf, 'dshr-unconfigured-card'), 'initial 200 configured:false must show onboarding card');
+  assert.ok(findById(treeUnconf, 'dshr-bind-form'), 'initial 200 configured:false must show bind form');
+  assert.equal(findById(treeUnconf, 'dshr-admin-error-card'), null);
+
+  // Subsequent poll returns 403 -> must switch to #dshr-admin-error-card with Retry and hide bind form
+  responder2 = async () => new Response(
+    JSON.stringify({ ok: false, error: 'Local DSH owner session required' }),
+    { status: 403, headers: { 'content-type': 'application/json' } },
+  );
+  assert.ok(pollTimers2.length >= 1, 'panel must register background poll timer');
+  pollTimers2[0]();
+  await new Promise((r) => setTimeout(r, 10));
+  const treePolled403 = render2();
+  assert.ok(findById(treePolled403, 'dshr-admin-error-card'), 'polled 403 after unconfigured 200 must show error card');
+  assert.ok(findById(treePolled403, 'dshr-admin-retry-btn'), 'polled 403 error card must show Retry button');
+  assert.equal(findById(treePolled403, 'dshr-unconfigured-card'), null, 'polled 403 must hide unconfigured onboarding card');
+  assert.equal(findById(treePolled403, 'dshr-bind-form'), null, 'polled 403 must hide bind form');
 });

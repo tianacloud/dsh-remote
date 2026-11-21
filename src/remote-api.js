@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { normalizeStun } from '../web-src/peer-path.js';
 import { formatPairingKey } from './state.js';
 
@@ -14,20 +15,138 @@ function jsonResponse(status, body) {
   });
 }
 
+function parseIpv4Bytes(ip) {
+  if (!/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/u.test(ip)) return null;
+  const parts = ip.split('.').map(Number);
+  if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+  return parts;
+}
+
+function parseIpv6Words(ip) {
+  if (isIP(ip) !== 6) return null;
+  let normalized = ip.toLowerCase();
+  const lastColon = normalized.lastIndexOf(':');
+  const tail = normalized.slice(lastColon + 1);
+  if (tail.includes('.')) {
+    const v4 = parseIpv4Bytes(tail);
+    if (!v4) return null;
+    const hi = ((v4[0] << 8) | v4[1]).toString(16);
+    const lo = ((v4[2] << 8) | v4[3]).toString(16);
+    normalized = `${normalized.slice(0, lastColon + 1)}${hi}:${lo}`;
+  }
+  const halves = normalized.split('::');
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  let groups;
+  if (halves.length === 2) {
+    const missing = 8 - (left.length + right.length);
+    if (missing < 1) return null;
+    groups = [...left, ...Array(missing).fill('0'), ...right];
+  } else {
+    if (left.length !== 8) return null;
+    groups = left;
+  }
+  const words = groups.map((g) => Number.parseInt(g, 16));
+  if (words.length !== 8 || words.some((w) => !Number.isInteger(w) || w < 0 || w > 0xffff)) {
+    return null;
+  }
+  return words;
+}
+
+function parseIpAddress(addr) {
+  if (!addr || typeof addr !== 'string') return null;
+  if (/\s/u.test(addr)) return null;
+  let bare = addr;
+  const hasOpen = bare.startsWith('[');
+  const hasClose = bare.endsWith(']');
+  if (hasOpen || hasClose) {
+    if (!hasOpen || !hasClose) return null;
+    bare = bare.slice(1, -1);
+    if (!bare.includes(':')) return null;
+  }
+  const pctIdx = bare.indexOf('%');
+  if (pctIdx !== -1) {
+    const zone = bare.slice(pctIdx + 1);
+    bare = bare.slice(0, pctIdx);
+    if (!bare.includes(':') || !zone || !/^[a-zA-Z0-9._:-]+$/u.test(zone)) {
+      return null;
+    }
+  }
+  const v4 = parseIpv4Bytes(bare);
+  if (v4) return { family: 4, bytes: v4 };
+  const v6 = parseIpv6Words(bare);
+  if (!v6) return null;
+  // Unwrap IPv4-mapped IPv6 (::ffff:0:0/96) in both dotted-quad and hex forms
+  if (v6[0] === 0 && v6[1] === 0 && v6[2] === 0 && v6[3] === 0 && v6[4] === 0 && v6[5] === 0xffff) {
+    return {
+      family: 4,
+      bytes: [(v6[6] >>> 8) & 0xff, v6[6] & 0xff, (v6[7] >>> 8) & 0xff, v6[7] & 0xff],
+    };
+  }
+  return { family: 6, words: v6 };
+}
+
+function isLoopbackIpv4(bytes) {
+  return bytes[0] === 127;
+}
+
+function isPrivateOrLocalIpv4(bytes) {
+  const [a, b] = bytes;
+  if (a === 127) return true; // Loopback: 127.0.0.0/8
+  if (a === 10) return true; // RFC 1918: 10.0.0.0/8
+  if (a === 172 && b >= 16 && b <= 31) return true; // RFC 1918: 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // RFC 1918: 192.168.0.0/16
+  if (a === 100 && b >= 64 && b <= 127) return true; // RFC 6598 / Tailscale CGNAT: 100.64.0.0/10
+  if (a === 169 && b === 254) return true; // RFC 3927 Link-Local: 169.254.0.0/16
+  return false;
+}
+
+function isLoopbackIpv6(words) {
+  return words[0] === 0 && words[1] === 0 && words[2] === 0 && words[3] === 0 &&
+    words[4] === 0 && words[5] === 0 && words[6] === 0 && words[7] === 1;
+}
+
+function isPrivateOrLocalIpv6(words) {
+  if (isLoopbackIpv6(words)) return true; // Loopback: ::1
+  if ((words[0] & 0xffc0) === 0xfe80) return true; // Link-Local: fe80::/10
+  if ((words[0] & 0xfe00) === 0xfc00) return true; // Unique Local (ULA, incl. Tailscale fd7a::): fc00::/7
+  return false;
+}
+
 export function isLoopbackAddress(addr) {
-  if (!addr || typeof addr !== 'string') return false;
-  const bare = addr.trim().replace(/^\[|\]$/gu, '').toLowerCase();
-  return bare === '127.0.0.1' || bare === '::1' || bare === '::ffff:127.0.0.1';
+  const parsed = parseIpAddress(addr);
+  if (!parsed) return false;
+  return parsed.family === 4 ? isLoopbackIpv4(parsed.bytes) : isLoopbackIpv6(parsed.words);
+}
+
+export function isPrivateOrLocalAddress(addr) {
+  const parsed = parseIpAddress(addr);
+  if (!parsed) return false;
+  return parsed.family === 4 ? isPrivateOrLocalIpv4(parsed.bytes) : isPrivateOrLocalIpv6(parsed.words);
+}
+
+export function isValidHostHeader(hostHeader) {
+  if (!hostHeader || typeof hostHeader !== 'string') return false;
+  if (/[\s\u0000-\u001f\u007f/@?#\\]/u.test(hostHeader) || hostHeader.endsWith(':')) return false;
+  try {
+    const parsed = new URL(`http://${hostHeader}`);
+    if (!parsed.hostname) return false;
+    if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function isLoopbackHostHeader(hostHeader) {
-  if (!hostHeader || typeof hostHeader !== 'string') return false;
-  const trimmed = hostHeader.trim();
-  if (!trimmed || /[\s/@?#\\]/u.test(trimmed)) return false;
+  if (!isValidHostHeader(hostHeader)) return false;
   try {
-    const parsed = new URL(`http://${trimmed}`);
+    const parsed = new URL(`http://${hostHeader}`);
     const host = parsed.hostname.toLowerCase();
-    return host === '127.0.0.1' || host === '::1' || host === '[::1]' || host === 'localhost';
+    return host === 'localhost' || isLoopbackAddress(host);
   } catch {
     return false;
   }
@@ -69,12 +188,22 @@ function normalizeRejectionResponse(rejection, { mapAuthToForbidden = false } = 
   return jsonResponse(403, { ok: false, error: 'Request rejected' });
 }
 
+function normalizeAuthTarget(nodeReq, request) {
+  if (!nodeReq) return request;
+  if (nodeReq.headers?.host === undefined && typeof nodeReq.headers?.[':authority'] === 'string') {
+    return Object.create(nodeReq, {
+      headers: { value: { ...nodeReq.headers, host: nodeReq.headers[':authority'] }, enumerable: true },
+    });
+  }
+  return nodeReq;
+}
+
 /**
- * Triple-guard check for all local-only `/api/tiana-remote/admin/*` endpoints:
- * 1. Verified loopback TCP socket address (`isLoopbackAddress(remoteAddress) === true`, fail-closed when missing)
- *    AND verified loopback `Host` header (`isLoopbackHostHeader(hostHeader) === true`, fail-closed when missing/non-loopback)
+ * Triple-guard check for all local/LAN/Tailnet `/api/tiana-remote/admin/*` endpoints:
+ * 1. Verified non-public TCP socket address (`isPrivateOrLocalAddress(remoteAddress) === true`, fail-closed when missing)
+ *    AND syntactically valid `Host` header (for non-loopback peer or Host, `connection.requestRejection` is mandatory)
  * 2. Strict absence of `X-DSH-Remote-Tunnel` header (checked via presence, rejecting even empty-string values)
- * 3. Valid local DSH owner session via `connection.requestRejection` (supports numeric status code & Response return forms)
+ * 3. Valid DSH trusted-host + owner session via `connection.requestRejection` (supports numeric status code & Response return forms)
  */
 export async function guardAdminRequest(request, connection, meta = {}) {
   const { remoteAddress, hostHeader, hasTunnelHeader, nodeReq } = meta;
@@ -87,15 +216,20 @@ export async function guardAdminRequest(request, connection, meta = {}) {
     return jsonResponse(403, { ok: false, error: 'Admin endpoints are forbidden over remote tunnel' });
   }
 
-  // Guard 1a: require verified TCP loopback peer address (fail-closed when absent)
-  if (!isLoopbackAddress(remoteAddress)) {
-    return jsonResponse(403, { ok: false, error: 'Admin endpoints require local loopback access' });
+  // Guard 1a: require verified loopback, private LAN, Tailscale/CGNAT, link-local, or ULA peer address (fail-closed when absent)
+  if (!isPrivateOrLocalAddress(remoteAddress)) {
+    return jsonResponse(403, { ok: false, error: 'Admin endpoints require local or private network access' });
   }
 
-  // Guard 1b: require verified loopback Host header (fail-closed when missing or non-loopback)
+  // Guard 1b: require syntactically valid non-empty Host header (supporting HTTP/2 :authority)
   let effectiveHost;
   if (nodeReq) {
-    effectiveHost = nodeReq.headers?.host;
+    const hHost = nodeReq.headers?.host;
+    const hAuth = nodeReq.headers?.[':authority'];
+    if (hHost !== undefined && hAuth !== undefined && String(hHost).toLowerCase() !== String(hAuth).toLowerCase()) {
+      return jsonResponse(403, { ok: false, error: 'Admin endpoints reject conflicting Host and :authority headers' });
+    }
+    effectiveHost = hHost ?? hAuth;
   } else if (hostHeader !== undefined) {
     effectiveHost = hostHeader;
   } else if (request.headers.has('host')) {
@@ -107,13 +241,22 @@ export async function guardAdminRequest(request, connection, meta = {}) {
       effectiveHost = '';
     }
   }
-  if (!isLoopbackHostHeader(effectiveHost)) {
-    return jsonResponse(403, { ok: false, error: 'Admin endpoints require a loopback Host header' });
+  if (!isValidHostHeader(effectiveHost)) {
+    return jsonResponse(403, { ok: false, error: 'Admin endpoints require a valid Host header' });
   }
 
-  // Guard 3: verify local DSH owner session
-  if (typeof connection?.requestRejection === 'function') {
-    const authTarget = nodeReq ?? request;
+  const isLoopback = isLoopbackAddress(remoteAddress) && isLoopbackHostHeader(effectiveHost);
+  const hasRequestRejection = typeof connection?.requestRejection === 'function';
+  if (!isLoopback && !hasRequestRejection) {
+    return jsonResponse(403, {
+      ok: false,
+      error: 'Non-loopback admin access requires DSH trusted-host and owner-session verification',
+    });
+  }
+
+  // Guard 3: verify DSH trusted-host + owner session
+  if (hasRequestRejection) {
+    const authTarget = normalizeAuthTarget(nodeReq, request);
     const rejection = await connection.requestRejection(authTarget, { allowAuthorizationHeader: false });
     const mapped = normalizeRejectionResponse(rejection, { mapAuthToForbidden: true });
     if (mapped) return mapped;
@@ -124,7 +267,7 @@ export async function guardAdminRequest(request, connection, meta = {}) {
 
 export async function guardPublicRequest(request, connection, meta = {}) {
   if (typeof connection?.requestRejection === 'function') {
-    const authTarget = meta.nodeReq ?? request;
+    const authTarget = normalizeAuthTarget(meta.nodeReq, request);
     const rejection = await connection.requestRejection(authTarget, { allowAuthorizationHeader: false });
     const mapped = normalizeRejectionResponse(rejection, { mapAuthToForbidden: false });
     if (mapped) return mapped;
@@ -343,21 +486,22 @@ export function registerWebServerRoutes(webServer, connection, controller) {
       }
       const headers = new Headers();
       for (const [k, v] of Object.entries(req.headers || {})) {
-        if (v === undefined) continue;
+        if (v === undefined || k.startsWith(':')) continue;
         if (Array.isArray(v)) {
           for (const item of v) headers.append(k, String(item));
         } else {
           headers.set(k, String(v));
         }
       }
+      const rawHost = req.headers?.host ?? req.headers?.[':authority'];
       const fetchReq = new Request(new URL(String(req.url || '/'), 'http://127.0.0.1').href, {
         method,
         headers,
         body: method === 'GET' || method === 'HEAD' ? undefined : bodyBuf,
       });
       const response = await handler(fetchReq, {
-        remoteAddress: req.socket?.remoteAddress,
-        hostHeader: req.headers?.host,
+        remoteAddress: req.socket?.remoteAddress ?? req.stream?.session?.socket?.remoteAddress,
+        hostHeader: rawHost,
         hasTunnelHeader: 'x-dsh-remote-tunnel' in (req.headers || {}),
         nodeReq: req,
       });

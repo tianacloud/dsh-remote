@@ -407,6 +407,14 @@
       statusPaused: '已暂停监听',
       statusUnconfigured: '尚未绑定',
       statusReconnecting: '正在重连 Relay…',
+      statusLoading: '加载中…',
+      statusAccessDenied: '访问受限',
+      statusError: '加载失败',
+      adminErrorTitle: '无法加载主机管理状态',
+      adminAccessDeniedTitle: '主机管理接口访问受限',
+      adminErrorHint: '请确认当前浏览器通过本机或受信任的局域网／Tailnet 地址访问 DSH（且已配置 --trusted-host 并具备有效的本机所有者会话）。',
+      retry: '重试',
+      loadingOverview: '正在加载 Tiana Remote 状态…',
       toggleLabel: '启用远程访问',
       remoteUrl: '托管访问地址',
       copy: '复制',
@@ -477,6 +485,14 @@
       statusPaused: 'Paused',
       statusUnconfigured: 'Not configured',
       statusReconnecting: 'Reconnecting…',
+      statusLoading: 'Loading…',
+      statusAccessDenied: 'Access Denied',
+      statusError: 'Error',
+      adminErrorTitle: 'Unable to load host management status',
+      adminAccessDeniedTitle: 'Host admin API access denied',
+      adminErrorHint: 'Verify you are accessing DSH over loopback or a private LAN/Tailnet address configured via --trusted-host with an active owner session.',
+      retry: 'Retry',
+      loadingOverview: 'Loading Tiana Remote status…',
       toggleLabel: 'Enable Remote Access',
       remoteUrl: 'Hosted Remote URL',
       copy: 'Copy',
@@ -570,7 +586,9 @@
         background: transparent; color: var(--dsw-alias-label-secondary, #94a3b8);
       }
       .dshr-tab[aria-selected="true"] {
-        background: var(--dsw-alias-brand-primary, #2563eb); border-color: transparent; color: #fff;
+        background: var(--dsw-alias-brand-primary, #2563eb);
+        border-color: transparent;
+        color: var(--dsw-alias-label-primary-foreground, #ffffff);
       }
       .dshr-badge {
         display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
@@ -581,6 +599,7 @@
       .dshr-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
       .dshr-dot.is-online { background: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25); }
       .dshr-dot.is-warn { background: #f59e0b; }
+      .dshr-dot.is-error { background: var(--dsw-alias-state-error-primary, #ef4444); box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25); }
       .dshr-mono {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 13px; padding: 8px 12px; border-radius: 8px; flex: 1; min-width: 200px;
@@ -605,11 +624,18 @@
       }
       .dshr-btn:hover:not(:disabled) { filter: brightness(1.08); }
       .dshr-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-      .dshr-btn-primary {
-        background: var(--dsw-alias-brand-primary, #2563eb); border-color: transparent; color: #fff;
+      .dshr-root .dshr-btn-primary,
+      .dshr-root a.dshr-btn-primary,
+      .dshr-root a.dshr-btn-primary:visited,
+      .dshr-root a.dshr-btn-primary:hover {
+        background: var(--dsw-alias-brand-primary, #2563eb);
+        border-color: transparent;
+        color: var(--dsw-alias-label-primary-foreground, #ffffff);
       }
       .dshr-btn-danger {
-        background: rgba(220, 38, 38, 0.16); border-color: rgba(248, 113, 113, 0.45); color: #f87171;
+        background: rgba(220, 38, 38, 0.16);
+        border-color: rgba(248, 113, 113, 0.45);
+        color: var(--dsw-alias-state-error-primary, #f87171);
       }
       .dshr-input {
         box-sizing: border-box; width: 100%; padding: 8px 12px; border-radius: 8px; font-size: 13px;
@@ -632,7 +658,9 @@
       }
       .dshr-err {
         padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.45;
-        background: rgba(220, 38, 38, 0.14); border: 1px solid rgba(248, 113, 113, 0.45); color: #f87171;
+        background: rgba(220, 38, 38, 0.14);
+        border: 1px solid rgba(248, 113, 113, 0.45);
+        color: var(--dsw-alias-state-error-primary, #f87171);
       }
       .dshr-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 500; }
       dialog.dshr-dialog {
@@ -738,6 +766,8 @@
         : Boolean(globalThis.__DSH_REMOTE_SHELL__?.isRemote || globalThis.__DSH_TRANSPORT__?.ownsHost);
 
       const [overview, setOverview] = useState(null);
+      const [adminLoading, setAdminLoading] = useState(() => !isRemote);
+      const [adminLoadError, setAdminLoadError] = useState(null);
       const [publicStatus, setPublicStatus] = useState(null);
       const [shellSnap, setShellSnap] = useState(() => globalThis.__DSH_REMOTE_SHELL__?.getStatusSnapshot?.() || null);
       const [revealedKey, setRevealedKey] = useState('');
@@ -790,14 +820,42 @@
             if (resp.ok) {
               const data = await resp.json();
               setOverview(data);
+              setAdminLoadError(null);
               // NEVER overwrite user's in-progress form edits during background polling
               if (!settingsDirtyRef.current) {
                 hydrateDraftsFromOverview(data);
               }
+            } else {
+              let errMessage = '';
+              try {
+                const errBody = await resp.json();
+                if (errBody && typeof errBody.error === 'string') {
+                  errMessage = errBody.error;
+                }
+              } catch {
+                try {
+                  errMessage = (await resp.text()).trim();
+                } catch {
+                  // ignore body parse failures
+                }
+              }
+              setAdminLoadError({
+                status: resp.status,
+                message: errMessage || resp.statusText || `HTTP ${resp.status}`,
+              });
             }
           }
-        } catch {
-          // ignore transient poll errors
+        } catch (err) {
+          if (!isRemote) {
+            setAdminLoadError({
+              status: 0,
+              message: err instanceof Error ? err.message : String(err || 'Network error'),
+            });
+          }
+        } finally {
+          if (!isRemote) {
+            setAdminLoading(false);
+          }
         }
       }, [isRemote, hydrateDraftsFromOverview]);
 
@@ -1081,13 +1139,43 @@
         );
       };
 
-      const statusLabel = !configured
-        ? t('statusUnconfigured')
-        : !enabled
-          ? t('statusPaused')
-          : relayConnected
-            ? t('statusOnline')
-            : t('statusReconnecting');
+      const handleRetryAdminLoad = async () => {
+        setBusy('retry');
+        try {
+          await fetchState();
+        } finally {
+          setBusy('');
+        }
+      };
+
+      const isAdminLoadError = Boolean(adminLoadError) && (
+        !overview ||
+        !overview.configured ||
+        adminLoadError.status === 401 ||
+        adminLoadError.status === 403
+      );
+      const isAdminLoadingInitial = !overview && !adminLoadError && adminLoading;
+      const isAccessDenied = Boolean(adminLoadError && (adminLoadError.status === 401 || adminLoadError.status === 403));
+      const showConfiguredPanel = !isAdminLoadError && configured;
+      const showUnconfiguredPanel = !isAdminLoadError && Boolean(overview) && !configured;
+
+      const statusLabel = isAdminLoadError
+        ? (isAccessDenied ? t('statusAccessDenied') : t('statusError'))
+        : isAdminLoadingInitial
+          ? t('statusLoading')
+          : !configured
+            ? t('statusUnconfigured')
+            : !enabled
+              ? t('statusPaused')
+              : relayConnected
+                ? t('statusOnline')
+                : t('statusReconnecting');
+
+      const statusDotClass = isAdminLoadError
+        ? 'is-error'
+        : isAdminLoadingInitial
+          ? 'is-warn'
+          : (enabled && relayConnected ? 'is-online' : enabled ? 'is-warn' : '');
 
       return h('div', { className: 'dshr-root', 'data-dshr-mode': 'local' },
         h('div', { className: 'dshr-wrap' },
@@ -1098,10 +1186,10 @@
             ),
             h('div', { className: 'dshr-row' },
               h('span', { className: 'dshr-badge', id: 'dshr-local-status-badge' },
-                h('span', { className: `dshr-dot ${enabled && relayConnected ? 'is-online' : enabled ? 'is-warn' : ''}` }),
+                h('span', { className: `dshr-dot ${statusDotClass}` }),
                 statusLabel,
               ),
-              configured && h('label', { className: 'dshr-switch' },
+              showConfiguredPanel && h('label', { className: 'dshr-switch' },
                 h('input', {
                   type: 'checkbox',
                   id: 'dshr-enable-toggle',
@@ -1116,8 +1204,34 @@
 
           toast && h('div', { className: 'dshr-notice', role: 'status' }, toast),
 
+          // Explicit admin load error card (prevents falsely rendering "Not bound yet" on 403/5xx/network failure)
+          isAdminLoadError && h('div', { className: 'dshr-card', id: 'dshr-admin-error-card', role: 'alert' },
+            h('div', { className: 'dshr-card-head' },
+              h('h3', { className: 'dshr-card-title' }, isAccessDenied ? t('adminAccessDeniedTitle') : t('adminErrorTitle')),
+              h('span', { className: 'dshr-badge', id: 'dshr-admin-error-status' },
+                adminLoadError.status ? `HTTP ${adminLoadError.status}` : 'NETWORK',
+              ),
+            ),
+            h('div', { className: 'dshr-err', id: 'dshr-admin-error-message' }, adminLoadError.message),
+            h('div', { className: 'dshr-label' }, t('adminErrorHint')),
+            h('div', { className: 'dshr-row' },
+              h('button', {
+                type: 'button',
+                id: 'dshr-admin-retry-btn',
+                className: 'dshr-btn dshr-btn-primary',
+                disabled: busy === 'retry',
+                onClick: () => void handleRetryAdminLoad(),
+              }, t('retry')),
+            ),
+          ),
+
+          // Initial loading card before first admin overview response
+          isAdminLoadingInitial && h('div', { className: 'dshr-card', id: 'dshr-admin-loading-card' },
+            h('div', { className: 'dshr-label' }, t('loadingOverview')),
+          ),
+
           // Unconfigured interactive onboarding card (Bind existing OR Create new Tiana app)
-          !configured && h('div', { className: 'dshr-card', id: 'dshr-unconfigured-card' },
+          showUnconfiguredPanel && h('div', { className: 'dshr-card', id: 'dshr-unconfigured-card' },
             h('div', { className: 'dshr-card-head' },
               h('h3', { className: 'dshr-card-title' }, t('onboardTitle')),
             ),
@@ -1233,7 +1347,7 @@
           ),
 
           // Card 1: Remote URL & QR
-          configured && h('div', { className: 'dshr-card' },
+          showConfiguredPanel && h('div', { className: 'dshr-card' },
             h('div', { className: 'dshr-card-head' },
               h('h3', { className: 'dshr-card-title' }, t('remoteUrl')),
               h('span', { className: 'dshr-label' }, overview?.host?.hostName || overview?.host?.hostId),
@@ -1251,7 +1365,7 @@
           ),
 
           // Card 2: E2EE Pairing Key
-          configured && h('div', { className: 'dshr-card' },
+          showConfiguredPanel && h('div', { className: 'dshr-card' },
             h('div', { className: 'dshr-card-head' },
               h('h3', { className: 'dshr-card-title' }, t('e2eeTitle')),
               h('span', { className: 'dshr-badge' }, `${t('e2eeFingerprint')}: ${overview?.e2ee?.fingerprint || '—'}`),
@@ -1277,7 +1391,7 @@
           ),
 
           // Card 3: Active Sessions & Function Token Expiry / Renew
-          configured && h('div', { className: 'dshr-card' },
+          showConfiguredPanel && h('div', { className: 'dshr-card' },
             h('div', { className: 'dshr-card-head' },
               h('h3', { className: 'dshr-card-title' }, `${t('sessionsTitle')} (${sessions.length})`),
               sessions.length > 0 && h('button', {
@@ -1316,7 +1430,7 @@
           ),
 
           // Card 4: Host, Network, Plugin Allowlist & Switch/Rebind Cloud App
-          configured && h('div', { className: 'dshr-card' },
+          showConfiguredPanel && h('div', { className: 'dshr-card' },
             h('form', { style: { display: 'grid', gap: 14 }, onSubmit: handleSaveSettings },
               h('div', { className: 'dshr-card-head' },
                 h('h3', { className: 'dshr-card-title' }, t('settingsTitle')),
