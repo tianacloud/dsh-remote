@@ -53,8 +53,98 @@ import {
 import { bindTianaRemoteWeb } from '../src/tiana-cli.js';
 import { readStoredKey, TunnelClient, writeStoredKey } from '../web-src/dsh-remote-entry.mjs';
 import { computeKeyFingerprint, decodeMasterSecret, generateLogicalSessionId } from '../web-src/e2ee.js';
+import { createShellUI, KEY_VIEW_COMMAND } from '../web-src/shell-ui.js';
 
 const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+test('key-view command uses the latest npx package', () => {
+  assert.equal(KEY_VIEW_COMMAND, 'npx --yes @tianacloud/dsh-remote@latest key');
+});
+
+test('initial and retry unlock screens show and copy the key-view command without submitting', async (t) => {
+  class Element extends EventTarget {
+    children = [];
+    dataset = {};
+    style = {};
+    isConnected = true;
+    value = '';
+
+    constructor(tagName) {
+      super();
+      this.tagName = tagName;
+    }
+
+    append(...children) {
+      for (const child of children) {
+        if (child instanceof Element) child.parentElement = this;
+        this.children.push(child);
+      }
+    }
+
+    replaceChildren(...children) {
+      this.children.length = 0;
+      this.append(...children);
+    }
+
+    setAttribute(name, value) { this[name] = value; }
+    focus() {}
+
+    closest(tagName) {
+      for (let node = this; node; node = node.parentElement) {
+        if (node.tagName === tagName) return node;
+      }
+      return null;
+    }
+
+    click() {
+      const runDefault = this.dispatchEvent(new Event('click', { cancelable: true }));
+      if (runDefault && this.tagName === 'button' && this.type !== 'button') {
+        this.closest('form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+      }
+    }
+  }
+
+  const root = new Element('div');
+  const getElementById = (id, node = root) => {
+    if (node.id === id) return node;
+    for (const child of node.children ?? []) {
+      const found = getElementById(id, child);
+      if (found) return found;
+    }
+    return null;
+  };
+  globalThis.document = { createElement: (tag) => new Element(tag), getElementById, querySelector: () => null };
+  t.after(() => { delete globalThis.document; });
+  const writeText = t.mock.fn(async () => {});
+  t.mock.getter(globalThis, 'navigator', () => ({ clipboard: { writeText } }));
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const shell = createShellUI(root);
+
+  for (const errorMessage of ['', '配对密钥错误，请重试。']) {
+    void shell.promptUnlock({ errorMessage });
+    const command = getElementById('dsh-remote-key-cmd');
+    assert.equal(command.tagName, 'code');
+    assert.equal(command.textContent, KEY_VIEW_COMMAND);
+    assert.equal(command.closest('details'), null);
+
+    const copyButton = getElementById('dsh-remote-copy-key-cmd');
+    assert.equal(copyButton.type, 'button');
+    assert.equal(copyButton.textContent, '复制命令');
+    const form = getElementById('dsh-remote-e2ee-submit').closest('form');
+    const submit = t.mock.fn();
+    form.addEventListener('submit', submit);
+
+    copyButton.click();
+    await Promise.resolve();
+    assert.deepEqual(writeText.mock.calls.at(-1)?.arguments, [KEY_VIEW_COMMAND]);
+    assert.equal(copyButton.textContent, '已复制');
+    assert.equal(submit.mock.callCount(), 0);
+    assert.equal(getElementById('dsh-remote-e2ee-error').textContent, errorMessage);
+    t.mock.timers.tick(1800);
+    assert.equal(copyButton.textContent, '复制命令');
+  }
+  assert.equal(writeText.mock.callCount(), 2);
+});
 
 test('state.js v1->v2 lossless migration, file locking, and dshk1_ pairing key round-trip', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-v2-state-'));
