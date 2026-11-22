@@ -1747,7 +1747,7 @@ test('R4-3: README.md accurately documents checked-by-default localStorage, memo
   assert.equal(readme.includes('`: keepalive\\n\\n`'), false, 'README must not claim double-newline SSE keepalive');
 });
 
-test('connect accepts canonical --web and --app alias, and binds Online empty owner_id via tenant_id + can_manage proof', async () => {
+test('connect accepts --web and --app and binds a personal default space with Web app management proof', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-online-connect-'));
   try {
     // 1. Canonical --web and alias --app both parse cleanly, with --web taking precedence when both supplied
@@ -1781,8 +1781,7 @@ test('connect accepts canonical --web and --app alias, and binds Online empty ow
     await runConnect({ web: 'webcanon0001', app: 'appalias0002', noStart: true, noOpen: true, noClipboard: true }, mkDeps());
     assert.equal(seenWebId, 'webcanon0001');
 
-    // 2. Real bindTianaRemoteWeb through runConnect with Online empty owner_id + can_manage: true / false
-    const makeOnlineCli = (binPath, { ownerId, tenantId, spaceCanManage, webCanManage }) => {
+    const makeOnlineCli = (binPath, webCanManage) => {
       writeFileSync(binPath, `#!${process.execPath}
 const fs = require('node:fs');
 const path = require('node:path');
@@ -1793,15 +1792,15 @@ let data;
 if (args[0] === 'status') {
   data = {
     logged_in: true,
-    user: { user_id: 'usr-online-1', tenant_id: 'ten-online-1', email: 'owner@example.test' },
-    space: { tenant_id: 'ten-online-1', role: 'owner', can_manage: ${JSON.stringify(spaceCanManage)} },
+    user: { user_id: 'usr-online-1', tenant_id: 'ten-online-1', display_name: 'Online Owner', email: 'owner@example.test' },
+    space: { tenant_id: 'ten-online-1', display_name: 'Online Personal Space', role: 'tenant_owner', is_default: true, can_manage: false },
   };
 } else if (args[0] === 'web' && args[1] === 'list') {
   data = {
     items: [{
       id: 'onlineapp001',
-      owner_id: ${JSON.stringify(ownerId)},
-      tenant_id: ${JSON.stringify(tenantId)},
+      owner_id: '',
+      tenant_id: 'ten-online-1',
       enabled: true,
       deletion_pending: false,
       endpoint: 'https://onlineapp001.tianacloud.site/web/onlineapp001/',
@@ -1840,26 +1839,32 @@ console.log(JSON.stringify({ data }));
 `, { mode: 0o700 });
     };
 
-    const okBin = join(dir, 'tiana-ok');
-    const okState = join(dir, 'state-ok.json');
-    makeOnlineCli(okBin, { ownerId: '', tenantId: 'ten-online-1', spaceCanManage: true, webCanManage: true });
-    const okSummary = await runConnect({
+    const connectOnline = (bin, statePath) => runConnect({
       web: 'onlineapp001',
-      statePath: okState,
+      statePath,
       noStart: true,
       noOpen: true,
       noClipboard: true,
     }, {
-      nodeVersion: '24.9.0',
-      log: () => {},
-      resolveDsh: async () => ({ bin: '/usr/local/bin/dsh', version: '0.2.2' }),
-      ensurePlugins: async () => {},
-      ensureTianaToolchain: async () => ({ bin: okBin, version: '1.0.34' }),
-      ensureLogin: async () => ({ logged_in: true }),
-      readRuntime: () => ({ pid: process.pid, origin: 'http://127.0.0.1:3080' }),
-      checkDshResponsive: async () => true,
+      ...mkDeps(),
+      ensureTianaToolchain: async () => ({ bin, version: '1.0.34' }),
       bindRemoteWeb: (opts) => bindTianaRemoteWeb({ ...opts, probeRelayHealth: async () => ({ ok: true, paired: false }) }),
     });
+    const ownershipErrorWithGuidance = (reason, spaceId = 'ten-online-1') => ({ message }) => {
+      assert.equal(message.split('\n')[0], 'Only the verified owner of this DSH Remote Web app can bind a host to it.');
+      assert.ok(message.includes('Current Tiana CLI account: Online Owner / owner@example.test / usr-online-1'));
+      assert.ok(message.includes(`Current Tiana space: Online Personal Space / ${spaceId} / tenant_owner`));
+      assert.ok(message.includes('Target Web app: onlineapp001'));
+      assert.ok(message.includes(`Reason: ${reason}`));
+      for (const command of ['tiana status', 'tiana logout && tiana login', 'tiana space list', 'tiana space switch <spaceId>']) {
+        assert.ok(message.includes(command), `expected guidance for ${command}`);
+      }
+      return true;
+    };
+
+    const okBin = join(dir, 'tiana-ok');
+    makeOnlineCli(okBin, true);
+    const okSummary = await connectOnline(okBin, join(dir, 'state-ok.json'));
     assert.equal(okSummary.ok, true);
     assert.equal(okSummary.webId, 'onlineapp001');
     assert.equal(existsSync(join(dir, 'tiana-ok-params.json')), true);
@@ -1867,16 +1872,10 @@ console.log(JSON.stringify({ data }));
     // Negative: can_manage: false rejects before writing params or state
     const denyBin = join(dir, 'tiana-deny');
     const denyState = join(dir, 'state-deny.json');
-    makeOnlineCli(denyBin, { ownerId: '', tenantId: 'ten-online-1', spaceCanManage: true, webCanManage: false });
+    makeOnlineCli(denyBin, false);
     await assert.rejects(
-      () => bindTianaRemoteWeb({
-        webId: 'onlineapp001',
-        statePath: denyState,
-        tianaBin: denyBin,
-        probeRelayHealth: async () => ({ ok: true, paired: false }),
-        log: () => {},
-      }),
-      /owner/iu,
+      () => connectOnline(denyBin, denyState),
+      ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
     );
     assert.equal(existsSync(join(dir, 'tiana-deny-params.json')), false);
     assert.equal(existsSync(denyState), false);
@@ -1897,8 +1896,8 @@ if (args[0] === 'status') {
   const tid = ov.tenantId || 'ten-online-1';
   data = {
     logged_in: true,
-    user: { user_id: 'usr-online-1', tenant_id: tid, email: 'owner@example.test' },
-    space: { tenant_id: tid, role: 'owner', can_manage: true },
+    user: { user_id: 'usr-online-1', tenant_id: tid, display_name: 'Online Owner', email: 'owner@example.test' },
+    space: { tenant_id: tid, display_name: 'Online Personal Space', role: 'tenant_owner', is_default: true, can_manage: false },
   };
 } else if (args[0] === 'web' && args[1] === 'list') {
   data = { items: [{ id: 'onlineapp001', owner_id: ov.ownerId ?? '', tenant_id: 'ten-online-1', enabled: true, endpoint: 'https://onlineapp001.tianacloud.site/web/onlineapp001/' }] };
@@ -1930,7 +1929,7 @@ console.log(JSON.stringify({ data }));
         },
         log: () => {},
       }),
-      /owner/iu,
+      ownershipErrorWithGuidance('The active Tiana space changed while verifying the Web app.', 'ten-other-space'),
     );
     assert.equal(existsSync(join(dir, 'tiana-space-flip-params.json')), false);
     assert.equal(existsSync(spaceFlipState), false);

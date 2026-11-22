@@ -27,6 +27,7 @@ const RELAY_GO_DIR = join(PROJECT_ROOT, 'relay-go');
 export const DEFAULT_FUNCTION_NAME = 'dsh-remote-relay';
 export const DEFAULT_WEB_NAME = 'DSH Remote';
 export const DEFAULT_TOKEN_NAME = 'dsh-remote-host';
+const WEB_APP_OWNERSHIP_ERROR = 'Only the verified owner of this DSH Remote Web app can bind a host to it.';
 
 export function tianaBinary(overrideBin) {
   if (typeof overrideBin === 'string' && overrideBin.trim()) return overrideBin.trim();
@@ -346,11 +347,12 @@ export async function ensureHostToken(state, functionId, { rotateToken = false, 
   return { token: receipt.token, tokenId: receipt.token_id || '', expiresAt };
 }
 
-async function ensureWebApp({ webName, webId, log = console.log, ...cliOpts }) {
+async function ensureWebApp({ webName, webId, status, log = console.log, ...cliOpts }) {
+  requireTianaSpaceMatch(status, { webId });
   if (webId) {
-    const items = await listTianaWebApps(cliOpts);
+    const items = await listWebAppsForOwnership(webId, status, cliOpts);
     const existing = items.find((item) => item.id === webId);
-    if (!existing) throw new Error('The configured Web app is unavailable in the current Tiana space');
+    if (!existing) throw webAppNotFound(webId, status);
     return existing;
   }
   log(`[dsh-remote] Creating Web app "${webName}"...`);
@@ -363,7 +365,7 @@ async function ensureWebApp({ webName, webId, log = console.log, ...cliOpts }) {
   ], cliOpts);
   const createdApp = created?.project ?? created?.app ?? created;
   if (createdApp?.id && !normalizeIdentityValue(createdApp.owner_id) && !normalizeIdentityValue(createdApp.tenant_id)) {
-    const items = await listTianaWebApps(cliOpts);
+    const items = await listWebAppsForOwnership(createdApp.id, status, cliOpts);
     const listed = items.find((item) => item.id === createdApp.id);
     if (listed) return listed;
   }
@@ -374,89 +376,141 @@ function normalizeIdentityValue(value) {
   return value == null ? '' : String(value).trim();
 }
 
+function formatOwnershipError(baseMsg, { webId, status, webApp, binding, reason }) {
+  const { user, space } = status ?? {};
+  const account = [user?.display_name, user?.email, user?.user_id].map(normalizeIdentityValue).filter(Boolean);
+  const spaceId = normalizeIdentityValue(space?.tenant_id) || normalizeIdentityValue(user?.tenant_id);
+  const currentSpace = [space?.display_name, spaceId, space?.role].map(normalizeIdentityValue).filter(Boolean);
+  if (!reason) {
+    if (binding?.canManage === false) reason = '`tiana web functions get` returned `can_manage: false`.';
+    else if (binding?.canManage == null) reason = '`tiana web functions get` did not return `can_manage`.';
+    else reason = '`tiana web functions get` did not return `can_manage: true`.';
+  }
+
+  return [
+    baseMsg,
+    `Current Tiana CLI account: ${account.join(' / ') || '(unknown)'}`,
+    `Current Tiana space: ${currentSpace.join(' / ') || '(unknown)'}`,
+    `Target Web app: ${webId || webApp?.id || '(unknown)'}`,
+    `Reason: ${reason}`,
+    '',
+    'Run `tiana status` to verify the active Tiana CLI account and space.',
+    'If you are signed in with a different account, run `tiana logout && tiana login` and sign in as the Web app owner.',
+    'If you are in a different space, run `tiana space list`, then `tiana space switch <spaceId>`, or pass `--space <spaceId>` to `dsh-remote connect`.',
+  ].join('\n');
+}
+
+function webAppNotFound(webId, status) {
+  return new Error(formatOwnershipError(`Web app "${webId}" was not found in the current Tiana space.`, {
+    webId, status, reason: '`tiana web list` did not include this Web app.',
+  }));
+}
+
+async function listWebAppsForOwnership(webId, status, cliOpts) {
+  try {
+    return await listTianaWebApps(cliOpts);
+  } catch {
+    throw new Error(formatOwnershipError(`Could not look up Web app "${webId}" in the current Tiana space.`, {
+      webId, status, reason: '`tiana web list` failed to retrieve Web apps in the active space.',
+    }));
+  }
+}
+
+async function getWebBindingForOwnership(webId, status, cliOpts) {
+  try {
+    return await getWebFunctionBinding(webId, cliOpts);
+  } catch {
+    throw new Error(formatOwnershipError(WEB_APP_OWNERSHIP_ERROR, {
+      webId, status, reason: '`tiana web functions get` failed to retrieve the app’s management permissions.',
+    }));
+  }
+}
+
+function requireTianaSpaceMatch(status, { webId, webApp, errorMessage } = {}) {
+  const spaceTenantId = normalizeIdentityValue(status?.space?.tenant_id);
+  if (spaceTenantId && spaceTenantId !== normalizeIdentityValue(status?.user?.tenant_id)) {
+    throw new Error(formatOwnershipError(errorMessage || WEB_APP_OWNERSHIP_ERROR, {
+      webId, webApp, status, reason: 'The space `tenant_id` in Tiana status does not match the account `tenant_id`.',
+    }));
+  }
+}
+
 export function verifyWebAppOwnership(webApp, status, { binding = null, requireBindingProof = false, errorMessage } = {}) {
-  const msg = errorMessage || 'Only the verified owner of this DSH Remote Web app can bind a host to it.';
+  const reject = (reason) => {
+    throw new Error(formatOwnershipError(errorMessage || WEB_APP_OWNERSHIP_ERROR, { webApp, status, binding, reason }));
+  };
   const expectedUserId = normalizeIdentityValue(status?.user?.user_id);
   const expectedTenantId = normalizeIdentityValue(status?.user?.tenant_id);
   if (!expectedUserId || !expectedTenantId) {
-    throw new Error('Tiana login status is missing user_id or tenant_id.');
+    reject('Tiana login status is missing `user_id` or `tenant_id`.');
   }
 
   // Explicit management denial ALWAYS rejects fail-closed, even when webApp.owner_id matches.
   if (binding?.canManage === false) {
-    throw new Error(msg);
+    reject();
   }
+
+  requireTianaSpaceMatch(status, { webApp, errorMessage });
 
   const webTenantId = normalizeIdentityValue(webApp?.tenant_id);
   if (webTenantId && webTenantId !== expectedTenantId) {
-    throw new Error(msg);
+    reject('The Web app `tenant_id` does not match the active Tiana account `tenant_id`.');
   }
 
   const webOwnerId = normalizeIdentityValue(webApp?.owner_id);
   if (webOwnerId) {
     if (webOwnerId !== expectedUserId) {
-      throw new Error(msg);
+      reject('The Web app `owner_id` does not match the active Tiana account `user_id`.');
     }
     return { mode: 'owner_id', verified: true };
   }
 
-  // On Online (tiana CLI v1.0.34), `web list --json` returns `owner_id: ""` with `tenant_id`.
-  // Require strict non-empty tenant_id match, space.can_manage (if boolean), and
-  // management proof via `web functions get` returning `can_manage: true`.
-  if (!webTenantId || webTenantId !== expectedTenantId) {
-    throw new Error(msg);
+  // Online `web list --json` can return an empty owner_id. MGR's `web functions get`
+  // can_manage supplies Web app management proof. status.space.can_manage reflects
+  // multi-member team management and is false in standard personal default spaces.
+  if (!webTenantId) {
+    reject('The Web app is missing `tenant_id` and has no `owner_id`.');
   }
-  if (status?.space && typeof status.space.can_manage === 'boolean' && status.space.can_manage !== true) {
-    throw new Error(msg);
-  }
-  if (requireBindingProof) {
-    if (binding?.canManage !== true) {
-      throw new Error(msg);
-    }
-    return { mode: 'tenant_can_manage', verified: true };
-  }
-  return { mode: 'tenant_pending_manage_proof', verified: false };
+  if (!requireBindingProof) return { mode: 'tenant_pending_manage_proof', verified: false };
+  if (binding?.canManage !== true) reject();
+  return { mode: 'tenant_can_manage', verified: true };
 }
 
 async function revalidateWebAppAuthorization(webId, {
   expectedTenantId = '',
   expectedUserId = '',
-  errorMessage,
   cliOpts = {},
   fallbackWebApp = null,
   allowCreatedFallback = false,
 } = {}) {
-  const msg = errorMessage || 'Only the verified owner of this DSH Remote Web app can bind a host to it.';
   const latestStatus = await getTianaStatus(cliOpts);
-  if (!latestStatus?.user?.user_id || !latestStatus?.user?.tenant_id) {
-    throw new Error('Tiana login status is missing user_id or tenant_id.');
-  }
   if (expectedTenantId && latestStatus.user.tenant_id !== expectedTenantId) {
-    throw new Error(msg);
+    throw new Error(formatOwnershipError(WEB_APP_OWNERSHIP_ERROR, {
+      webId, status: latestStatus, reason: 'The active Tiana space changed while verifying the Web app.',
+    }));
   }
   if (expectedUserId && latestStatus.user.user_id !== expectedUserId) {
-    throw new Error(msg);
+    throw new Error(formatOwnershipError(WEB_APP_OWNERSHIP_ERROR, {
+      webId, status: latestStatus, reason: 'The active Tiana CLI account changed while verifying the Web app.',
+    }));
   }
+  requireTianaSpaceMatch(latestStatus, { webId });
 
-  const latestWebApps = await listTianaWebApps(cliOpts);
+  const latestWebApps = await listWebAppsForOwnership(webId, latestStatus, cliOpts);
   const listedWebApp = latestWebApps.find((item) => item.id === webId);
   if (!listedWebApp) {
     if (!allowCreatedFallback || !fallbackWebApp || latestWebApps.length > 0) {
-      throw new Error(`Web app "${webId}" was not found in the current Tiana space.`);
+      throw webAppNotFound(webId, latestStatus);
     }
-    // Stale owner_id from an earlier `web create` response is NOT current proof when `web list` is empty:
-    // require current server-side management proof (`can_manage: true`) from `web functions get` + space check.
-    if (latestStatus?.space && typeof latestStatus.space.can_manage === 'boolean' && latestStatus.space.can_manage !== true) {
-      throw new Error(msg);
-    }
-    const latestBinding = await getWebFunctionBinding(webId, cliOpts);
+    // An earlier `web create` response needs fresh proof from `web functions get`
+    // when `web list` is empty, including when the create response had an owner_id.
+    const latestBinding = await getWebBindingForOwnership(webId, latestStatus, cliOpts);
     if (latestBinding?.canManage !== true) {
-      throw new Error(msg);
+      throw new Error(formatOwnershipError(WEB_APP_OWNERSHIP_ERROR, { webId, status: latestStatus, binding: latestBinding }));
     }
     verifyWebAppOwnership(fallbackWebApp, latestStatus, {
       binding: latestBinding,
       requireBindingProof: true,
-      errorMessage: msg,
     });
     if (fallbackWebApp.enabled === false) {
       throw new Error(`Web app "${webId}" is disabled.`);
@@ -474,10 +528,7 @@ async function revalidateWebAppAuthorization(webId, {
     };
   }
 
-  verifyWebAppOwnership(listedWebApp, latestStatus, {
-    requireBindingProof: false,
-    errorMessage: msg,
-  });
+  verifyWebAppOwnership(listedWebApp, latestStatus);
   if (listedWebApp.enabled === false) {
     throw new Error(`Web app "${webId}" is disabled.`);
   }
@@ -486,11 +537,10 @@ async function revalidateWebAppAuthorization(webId, {
   }
   const latestWebUrl = validateWebEndpoint(listedWebApp, webId);
 
-  const latestBinding = await getWebFunctionBinding(webId, cliOpts);
+  const latestBinding = await getWebBindingForOwnership(webId, latestStatus, cliOpts);
   const verified = verifyWebAppOwnership(listedWebApp, latestStatus, {
     binding: latestBinding,
     requireBindingProof: true,
-    errorMessage: msg,
   });
   return {
     status: latestStatus,
@@ -506,7 +556,7 @@ async function ensureWebFunctionBinding(webId, functionId, {
   requireManage = false,
   initialBinding = null,
   revalidate = null,
-  errorMessage,
+  status,
   log = console.log,
   ...cliOpts
 } = {}) {
@@ -516,12 +566,13 @@ async function ensureWebFunctionBinding(webId, functionId, {
       const fresh = await revalidate();
       current = fresh.binding;
       requireManage = fresh.requiresManageProof;
+      status = fresh.status;
     } else {
-      current = await getWebFunctionBinding(webId, cliOpts);
+      current = await getWebBindingForOwnership(webId, status, cliOpts);
     }
   }
-  if (requireManage && current.canManage !== true) {
-    throw new Error(errorMessage || 'Only the verified owner of this DSH Remote Web app can bind a host to it.');
+  if (current.canManage === false || (requireManage && current.canManage !== true)) {
+    throw new Error(formatOwnershipError(WEB_APP_OWNERSHIP_ERROR, { webId, status, binding: current }));
   }
   const bound = current.functionInstanceIds;
   if (bound.length === 1 && bound[0] === functionId) {
@@ -553,11 +604,12 @@ async function ensureWebFunctionBinding(webId, functionId, {
         const fresh = await revalidate();
         rechecked = fresh.binding;
         recheckedRequireManage = fresh.requiresManageProof;
+        status = fresh.status;
       } else {
-        rechecked = await getWebFunctionBinding(webId, cliOpts);
+        rechecked = await getWebBindingForOwnership(webId, status, cliOpts);
       }
-      if (recheckedRequireManage && rechecked.canManage !== true) {
-        throw new Error(errorMessage || 'Only the verified owner of this DSH Remote Web app can bind a host to it.');
+      if (rechecked.canManage === false || (recheckedRequireManage && rechecked.canManage !== true)) {
+        throw new Error(formatOwnershipError(WEB_APP_OWNERSHIP_ERROR, { webId, status, binding: rechecked }));
       }
       if (rechecked.functionInstanceIds[0]) {
         log(`[dsh-remote] Adopting Relay Function ${rechecked.functionInstanceIds[0]} bound concurrently to Web ${webId}`);
@@ -601,9 +653,10 @@ export function hasBindingIdentityConflict(existingPolicy, { hostId, registratio
  * Writes DSH_REMOTE_POLICY via `tiana function parameters set` without rebuilding Go or .tweb.
  *
  * Transactional safety:
- * 1. Validates non-empty user_id/tenant_id and ownership (`webApp.owner_id === status.user.user_id`
- *    when non-empty, or non-empty `webApp.tenant_id === status.user.tenant_id` + space/web `can_manage: true`
- *    when Online CLI returns `owner_id: ""`).
+ * 1. Validates account and space IDs and checks ownership. A non-empty `owner_id` must match the
+ *    account `user_id`. An empty `owner_id` requires a matching non-empty Web app `tenant_id` and
+ *    MGR's Web app `can_manage: true` from `tiana web functions get`. `status.space.can_manage`
+ *    describes multi-member team management and is false in ordinary personal default spaces.
  * 2. Validates Relay Function is ACTIVE, HTTPS, and passes `/healthz` check.
  * 3. Reads existing function parameters strictly (never swallows errors).
  * 4. Checks rebind conflict across hostId + hostDigest + hostPublicKey.
@@ -633,18 +686,15 @@ export async function bindTianaRemoteWeb(options = {}) {
     throw new Error(`Failed to switch Tiana space to "${options.spaceId}".`);
   }
 
-  const bindOwnerError = 'Only the verified owner of this DSH Remote Web app can bind a host to it.';
+  requireTianaSpaceMatch(status, { webId });
   const targetTenantId = options.spaceId || status.user.tenant_id;
   const targetUserId = status.user.user_id;
-  const webApps = await listTianaWebApps(cliOpts);
+  const webApps = await listWebAppsForOwnership(webId, status, cliOpts);
   let webApp = webApps.find((item) => item.id === webId);
   if (!webApp) {
-    throw new Error(`Web app "${webId}" was not found in the current Tiana space.`);
+    throw webAppNotFound(webId, status);
   }
-  verifyWebAppOwnership(webApp, status, {
-    requireBindingProof: false,
-    errorMessage: bindOwnerError,
-  });
+  verifyWebAppOwnership(webApp, status);
   if (webApp.enabled === false) {
     throw new Error(`Web app "${webId}" is disabled.`);
   }
@@ -654,17 +704,15 @@ export async function bindTianaRemoteWeb(options = {}) {
   let webUrl = validateWebEndpoint(webApp, webId);
 
   // Locate bound Relay Function (and verify can_manage proof when owner_id is empty) before any mutation
-  const binding = await getWebFunctionBinding(webId, cliOpts);
+  const binding = await getWebBindingForOwnership(webId, status, cliOpts);
   verifyWebAppOwnership(webApp, status, {
     binding,
     requireBindingProof: true,
-    errorMessage: bindOwnerError,
   });
 
   const revalidateBindAuth = () => revalidateWebAppAuthorization(webId, {
     expectedTenantId: targetTenantId,
     expectedUserId: targetUserId,
-    errorMessage: bindOwnerError,
     cliOpts,
   });
 
@@ -693,7 +741,7 @@ export async function bindTianaRemoteWeb(options = {}) {
     const boundFnId = await ensureWebFunctionBinding(webId, fnId, {
       adoptExisting: true,
       revalidate: revalidateBindAuth,
-      errorMessage: bindOwnerError,
+      status,
       log,
       ...cliOpts,
     });
@@ -748,7 +796,7 @@ export async function bindTianaRemoteWeb(options = {}) {
         initialBinding: activeBinding,
         requireManage: freshAuth.requiresManageProof,
         revalidate: revalidateBindAuth,
-        errorMessage: bindOwnerError,
+        status,
         log,
         ...cliOpts,
       });
@@ -1020,10 +1068,13 @@ export async function provisionTianaRemote(options = {}) {
     const hostName = options.hostName || prevState.host?.hostName || identity.hostName;
 
     if (!/^[a-z0-9_-]{1,48}$/u.test(hostId)) throw new Error('Invalid host ID');
+    const configuredWebId = prevState.web?.id || pending.webId;
     const previousOwner = prevState.owner || pending.owner;
     if ((previousOwner?.userId && previousOwner.userId !== status.user.user_id) ||
         (previousOwner?.tenantId && previousOwner.tenantId !== status.user.tenant_id)) {
-      throw new Error('Use the Tiana account and space that originally configured this DSH host');
+      throw new Error(formatOwnershipError(WEB_APP_OWNERSHIP_ERROR, {
+        webId: configuredWebId, status, reason: 'Use the Tiana account and space that originally configured this DSH host.',
+      }));
     }
     if ((prevState.host?.hostId || pending.hostId || hostId) !== hostId) {
       throw new Error('This installation is already bound to a different host ID');
@@ -1046,17 +1097,11 @@ export async function provisionTianaRemote(options = {}) {
       lastWrittenPendingSetup = snapshotPending;
     };
 
-    const setupOwnerError = 'The configured Web app does not belong to the DSH owner and space';
-    const configuredWebId = prevState.web?.id || pending.webId;
     const hadExistingWebId = Boolean(configuredWebId);
-    let webApp = await ensureWebApp({ webName, webId: configuredWebId, log, ...cliOpts });
+    let webApp = await ensureWebApp({ webName, webId: configuredWebId, status, log, ...cliOpts });
     const webId = webApp?.id;
     if (!/^[a-z][a-z0-9]{11}$/u.test(webId || '')) throw new Error('Invalid Web app ID');
-    const ownershipCheck = verifyWebAppOwnership(webApp, status, {
-      requireBindingProof: false,
-      errorMessage: setupOwnerError,
-    });
-    let requiresManageProof = ownershipCheck.mode !== 'owner_id';
+    verifyWebAppOwnership(webApp, status);
     if (webApp.enabled === false) {
       throw new Error(`Web app "${webId}" is disabled.`);
     }
@@ -1067,11 +1112,10 @@ export async function provisionTianaRemote(options = {}) {
     let webEndpoint = webUrl.href;
     // Always query web functions binding during preflight (even when owner_id matches)
     // so an explicit can_manage: false rejects before creating/publishing a Relay Function or minting a token.
-    const initialBinding = await getWebFunctionBinding(webId, cliOpts);
+    const initialBinding = await getWebBindingForOwnership(webId, status, cliOpts);
     verifyWebAppOwnership(webApp, status, {
       binding: initialBinding,
       requireBindingProof: true,
-      errorMessage: setupOwnerError,
     });
     await checkpoint({ webId, owner, hostId, registrationKey, e2ee });
 
@@ -1101,7 +1145,6 @@ export async function provisionTianaRemote(options = {}) {
         preRelayAuth = await revalidateWebAppAuthorization(webId, {
           expectedTenantId: owner.tenantId,
           expectedUserId: owner.userId,
-          errorMessage: setupOwnerError,
           cliOpts,
           fallbackWebApp: hadExistingWebId ? null : webApp,
           allowCreatedFallback: !hadExistingWebId,
@@ -1114,7 +1157,6 @@ export async function provisionTianaRemote(options = {}) {
       webApp = preRelayAuth.webApp;
       webUrl = preRelayAuth.webUrl;
       webEndpoint = webUrl.href;
-      requiresManageProof = preRelayAuth.requiresManageProof;
 
       const fnShown = await syncAndPublishRelayFunction(fnInstance.id, webId, {
         forcePublish: Boolean(options.forcePublish), log, ...cliOpts,
@@ -1139,7 +1181,6 @@ export async function provisionTianaRemote(options = {}) {
         freshAuth = await revalidateWebAppAuthorization(webId, {
           expectedTenantId: owner.tenantId,
           expectedUserId: owner.userId,
-          errorMessage: setupOwnerError,
           cliOpts,
           fallbackWebApp: hadExistingWebId ? null : webApp,
           allowCreatedFallback: !hadExistingWebId,
@@ -1152,7 +1193,6 @@ export async function provisionTianaRemote(options = {}) {
       webApp = freshAuth.webApp;
       webUrl = freshAuth.webUrl;
       webEndpoint = webUrl.href;
-      requiresManageProof = freshAuth.requiresManageProof;
 
       const policy = buildRemotePolicy({
         hostId,
@@ -1167,8 +1207,8 @@ export async function provisionTianaRemote(options = {}) {
       await updateRemotePolicy(fnInstance.id, policy, { log, ...cliOpts });
       await ensureWebFunctionBinding(webId, fnInstance.id, {
         initialBinding: freshAuth.binding,
-        requireManage: requiresManageProof,
-        errorMessage: setupOwnerError,
+        requireManage: freshAuth.requiresManageProof,
+        status,
         log,
         ...cliOpts,
       });

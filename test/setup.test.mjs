@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,10 +9,13 @@ import { fileURLToPath } from 'node:url';
 import { generateE2eeSecret, loadRemoteState, saveRemoteState } from '../src/state.js';
 import {
   bindTianaRemoteWeb,
+  getTianaStatus,
   getWebFunctionBinding,
+  listTianaWebApps,
   provisionTianaRemote,
   updateRemotePolicy,
   validateRelayFunctionShown,
+  verifyWebAppOwnership,
 } from '../src/tiana-cli.js';
 
 const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -69,11 +73,22 @@ if (args[0] === 'status') {
     user: {
       user_id: overrides.userId || 'fixture-user',
       tenant_id: overrides.statusTenantId || 'fixture-tenant',
+      display_name: 'Fixture Owner',
       email: 'owner@example.test',
     },
-    ${hasSpace ? `space: { tenant_id: overrides.statusTenantId || 'fixture-tenant', role: 'owner', can_manage: ${JSON.stringify(opts.spaceCanManage)} },` : ''}
+    ${hasSpace ? `space: {
+      tenant_id: overrides.spaceTenantId || ${JSON.stringify(opts.spaceTenantId)} || overrides.statusTenantId || 'fixture-tenant',
+      display_name: 'Fixture Personal Space',
+      role: 'tenant_owner',
+      is_default: true,
+      can_manage: ${JSON.stringify(opts.spaceCanManage)},
+    },` : ''}
   };
 } else if (args[0] === 'web' && args[1] === 'list') {
+  if (${Boolean(opts.failWebList)}) {
+    process.stderr.write('simulated Web lookup error');
+    process.exit(7);
+  }
   data = {items: ${JSON.stringify(webListEmpty)} ? [] : [web]};
 } else if (args[0] === 'web' && args[1] === 'create') {
   data = { project: web };
@@ -136,6 +151,10 @@ if (args[0] === 'status') {
   }
   data = {token:'fixture-new-token',token_id:'fixture-new-id'};
 } else if (args.slice(0,3).join(' ') === 'web functions get') {
+  if (${Boolean(opts.failWebBindingGet)}) {
+    process.stderr.write('simulated Web lookup error');
+    process.exit(7);
+  }
   const seq = ${JSON.stringify(webCanManageSequence)};
   let cm = ${hasWebCanManage ? JSON.stringify(opts.webCanManage) : 'undefined'};
   if (Array.isArray(seq)) {
@@ -158,6 +177,24 @@ if (args[0] === 'status') {
 }
 console.log(JSON.stringify({data}));
 `, { mode: 0o700 });
+}
+
+function ownershipErrorWithGuidance(reason, {
+  firstLine = 'Only the verified owner of this DSH Remote Web app can bind a host to it.',
+  spaceId = 'fixture-tenant',
+} = {}) {
+  return ({ message }) => {
+    assert.equal(message.split('\n')[0], firstLine);
+    assert.ok(message.includes('Current Tiana CLI account: Fixture Owner / owner@example.test / fixture-user'));
+    assert.ok(message.includes(`Current Tiana space: Fixture Personal Space / ${spaceId} / tenant_owner`));
+    assert.ok(message.includes('Target Web app: fixture00001'));
+    assert.ok(message.includes(`Reason: ${reason}`));
+    for (const command of ['tiana status', 'tiana logout && tiana login', 'tiana space list', 'tiana space switch <spaceId>', '--space <spaceId>']) {
+      assert.ok(message.includes(command), `expected guidance for ${command}`);
+    }
+    assert.doesNotMatch(message, /simulated Web lookup error/u);
+    return true;
+  };
 }
 
 test('validateRelayFunctionShown accepts exact upstream Tiana CLI v1.0.32/v1.0.34 product_state JSON and rejects disabled/deleting/non-ACTIVE', () => {
@@ -490,22 +527,31 @@ test('bindTianaRemoteWeb enforces strict parameter read, owner_id, ACTIVE functi
 test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTianaRemoteWeb and provisionTianaRemote (fail-closed on negative cases)', async () => {
   const webId = 'fixture00001';
 
-  // Positive case: Online payload (owner_id: "", matching tenant_id, space.can_manage: true, web functions get can_manage: true)
+  // Personal default spaces disable team management while the owner can still manage the Web app.
   {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-online-ok-'));
     const binary = join(dir, 'tiana');
     const bindStatePath = join(dir, 'bind-state.json');
     const setupStatePath = join(dir, 'setup-state.json');
     try {
-      writeMockTiana(binary, dir, {
+      const personalSpace = {
         ownerId: '',
         tenantId: 'fixture-tenant',
-        spaceCanManage: true,
+        spaceCanManage: false,
         webCanManage: true,
-      });
+      };
+      writeMockTiana(binary, dir, personalSpace);
 
-      const binding = await getWebFunctionBinding(webId, { bin: binary });
+      const cliOpts = { bin: binary };
+      const status = await getTianaStatus(cliOpts);
+      const [webApp] = await listTianaWebApps(cliOpts);
+      const binding = await getWebFunctionBinding(webId, cliOpts);
+      assert.equal(status.space.can_manage, false);
       assert.equal(binding.canManage, true);
+      assert.deepEqual(verifyWebAppOwnership(webApp, status), { mode: 'tenant_pending_manage_proof', verified: false });
+      assert.deepEqual(verifyWebAppOwnership(webApp, status, { binding, requireBindingProof: true }), {
+        mode: 'tenant_can_manage', verified: true,
+      });
 
       const bound = await bindTianaRemoteWeb({
         webId,
@@ -521,7 +567,8 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
       assert.equal(bound.owner.tenantId, 'fixture-tenant');
       assert.equal(existsSync(join(dir, 'function-params.json')), true);
 
-      // Fresh setup (web create returning owner_id: "" + matching tenant_id + can_manage: true)
+      // Fresh setup also handles an initially empty `web list` after `web create`.
+      writeMockTiana(binary, dir, { ...personalSpace, webListEmpty: true });
       const provisioned = await provisionTianaRemote({
         hostId: 'online-setup-host',
         hostName: 'Online Setup Host',
@@ -541,27 +588,56 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
   const negativeCases = [
     {
       name: 'empty owner_id + matching tenant_id + web can_manage: false',
-      opts: { ownerId: '', tenantId: 'fixture-tenant', spaceCanManage: true, webCanManage: false },
+      opts: { ownerId: '', spaceCanManage: false, webCanManage: false },
+      reason: '`tiana web functions get` returned `can_manage: false`.',
     },
     {
       name: 'empty owner_id + matching tenant_id + missing web can_manage',
-      opts: { ownerId: '', tenantId: 'fixture-tenant', spaceCanManage: true },
+      opts: { ownerId: '', spaceCanManage: false },
+      reason: '`tiana web functions get` did not return `can_manage`.',
     },
     {
-      name: 'empty owner_id + matching tenant_id + space.can_manage: false despite web can_manage: true',
-      opts: { ownerId: '', tenantId: 'fixture-tenant', spaceCanManage: false, webCanManage: true },
+      name: 'matching owner_id + web can_manage: false',
+      opts: { spaceCanManage: false, webCanManage: false },
+      reason: '`tiana web functions get` returned `can_manage: false`.',
     },
     {
       name: 'empty owner_id + missing tenant_id despite can_manage: true',
-      opts: { ownerId: '', omitTenantId: true, spaceCanManage: true, webCanManage: true },
+      opts: { ownerId: '', omitTenantId: true, spaceCanManage: false, webCanManage: true },
+      reason: 'The Web app is missing `tenant_id`',
     },
     {
       name: 'empty owner_id + mismatched tenant_id despite can_manage: true',
-      opts: { ownerId: '', tenantId: 'other-tenant', spaceCanManage: true, webCanManage: true },
+      opts: { ownerId: '', tenantId: 'other-tenant', spaceCanManage: false, webCanManage: true },
+      reason: 'The Web app `tenant_id` does not match',
     },
     {
       name: 'non-empty mismatched owner_id despite matching tenant_id and can_manage: true',
-      opts: { ownerId: 'other-user', tenantId: 'fixture-tenant', spaceCanManage: true, webCanManage: true },
+      opts: { ownerId: 'other-user', spaceCanManage: false, webCanManage: true },
+      reason: 'The Web app `owner_id` does not match',
+    },
+    {
+      name: 'space tenant_id disagrees with the account despite explicit owner and can_manage: true',
+      opts: { spaceTenantId: 'other-space', spaceCanManage: false, webCanManage: true },
+      reason: 'The space `tenant_id` in Tiana status does not match',
+      spaceId: 'other-space',
+    },
+    {
+      name: 'the Web app is missing from the current space',
+      opts: { spaceCanManage: false, webListEmpty: true },
+      reason: '`tiana web list` did not include this Web app.',
+      firstLine: `Web app "${webId}" was not found in the current Tiana space.`,
+    },
+    {
+      name: 'listing Web apps fails',
+      opts: { spaceCanManage: false, failWebList: true },
+      reason: '`tiana web list` failed to retrieve Web apps',
+      firstLine: `Could not look up Web app "${webId}" in the current Tiana space.`,
+    },
+    {
+      name: 'retrieving Web app management proof fails',
+      opts: { ownerId: '', spaceCanManage: false, failWebBindingGet: true },
+      reason: '`tiana web functions get` failed to retrieve',
     },
   ];
 
@@ -592,7 +668,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           probeRelayHealth: async () => ({ ok: true, paired: false }),
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance(tc.reason, tc),
         `bindTianaRemoteWeb must reject: ${tc.name}`,
       );
       assert.equal(existsSync(join(dir, 'function-params.json')), false, `bind must not touch Relay params: ${tc.name}`);
@@ -605,7 +681,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           tianaBin: binary,
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance(tc.reason, tc),
         `provisionTianaRemote must reject: ${tc.name}`,
       );
       assert.equal(existsSync(join(dir, 'function-params.json')), false, `setup must not touch Relay params: ${tc.name}`);
@@ -636,7 +712,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           probeRelayHealth: async () => ({ ok: true, paired: false }),
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
       );
       assert.equal(existsSync(join(dir, 'function-params.json')), false, 'revoked can_manage under lock must block Relay params write');
       assert.equal(existsSync(statePath), false, 'revoked can_manage under lock must block local state write');
@@ -670,7 +746,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           },
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('The Web app `owner_id` does not match'),
       );
       assert.equal(existsSync(join(dir, 'function-params.json')), false, 'R8-2: mismatched owner under lock must block Relay params write');
       assert.equal(existsSync(statePath), false, 'R8-2: mismatched owner under lock must leave state.json absent');
@@ -699,7 +775,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           tianaBin: binary,
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
       );
       assert.equal(existsSync(join(dir, 'published')), false, 'R10-1 new web: must not publish Relay when revoked after initial check');
       assert.equal(existsSync(join(dir, 'token-minted.json')), false, 'R10-1 new web: must not mint token when revoked after initial check');
@@ -740,7 +816,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           tianaBin: binary,
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
       );
       assert.equal(existsSync(join(dir, 'published')), false, 'R10-1 reused web: must not publish Relay when revoked after initial check');
       assert.equal(existsSync(join(dir, 'token-minted.json')), false, 'R10-1 reused web: must not mint token when revoked after initial check');
@@ -775,7 +851,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           tianaBin: binary,
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
       );
       assert.equal(existsSync(join(dir, 'function-created.json')), false, 'R10-1: must not create Function when constant can_manage: false');
       assert.equal(existsSync(join(dir, 'published')), false, 'R10-1: must not publish Relay when constant can_manage: false');
@@ -809,7 +885,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           tianaBin: binaryNew,
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
       );
       assert.equal(existsSync(join(dirNew, 'function-created.json')), false);
       assert.equal(existsSync(join(dirNew, 'published')), false);
@@ -846,7 +922,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           tianaBin: binaryReused,
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
       );
       assert.equal(existsSync(join(dirReused, 'function-created.json')), false);
       assert.equal(existsSync(join(dirReused, 'published')), false);
@@ -881,7 +957,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           tianaBin: binary,
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
       );
       const rotated = JSON.parse(readFileSync(join(dir, 'concurrent-key-rotate.json'), 'utf8'));
       assert.ok(rotated.secret, 'concurrent key --rotate must have succeeded');
@@ -937,7 +1013,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           tianaBin: binary,
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
       );
       assert.equal(readFileSync(statePath, 'utf8'), bytesBefore, 'R9-3: without concurrent edits state.json must remain byte-identical via atomic restore');
 
@@ -957,7 +1033,7 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
           tianaBin: binary,
           log: () => {},
         }),
-        /owner/iu,
+        ownershipErrorWithGuidance('`tiana web functions get` returned `can_manage: false`.'),
       );
       const rotated = JSON.parse(readFileSync(join(dir, 'concurrent-key-rotate.json'), 'utf8'));
       assert.ok(rotated.secret && rotated.secret !== initialSecret, 'concurrent key --rotate must rotate key');
@@ -970,5 +1046,29 @@ test('Online empty webApp.owner_id uses tenant_id + can_manage proof in bindTian
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+test('CLI setup prints the full Web app lookup error and guidance to stderr', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-cli-look-up-'));
+  const binary = join(dir, 'tiana');
+  const statePath = join(dir, 'tiana-remote', 'state.json');
+  try {
+    writeMockTiana(binary, dir, { spaceCanManage: false, webListEmpty: true });
+    saveRemoteState({ version: 2, web: { id: 'fixture00001' } }, statePath);
+    const stateBefore = readFileSync(statePath, 'utf8');
+    const { status, stderr } = spawnSync(process.execPath, [join(PROJECT_ROOT, 'cli.js'), 'setup'], {
+      env: { ...process.env, DSH_HOME: dir, TIANA_BIN: binary },
+      encoding: 'utf8',
+    });
+    const prefix = '[dsh-remote] Error: ';
+    assert.equal(status, 1);
+    assert.ok(stderr.startsWith(prefix));
+    ownershipErrorWithGuidance('`tiana web list` did not include this Web app.', {
+      firstLine: 'Web app "fixture00001" was not found in the current Tiana space.',
+    })({ message: stderr.slice(prefix.length) });
+    assert.equal(readFileSync(statePath, 'utf8'), stateBefore);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
