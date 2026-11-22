@@ -5,7 +5,14 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { HostBridge, MAX_STREAMS as HOST_MAX_STREAMS } from '../src/host-bridge.js';
+import {
+  HostBridge,
+  MAX_HTTP_STREAMS,
+  MAX_LONG_LIVED_STREAMS,
+  MAX_SESSION_HTTP_STREAMS,
+  MAX_SESSION_LONG_LIVED_STREAMS,
+  MAX_STREAMS as HOST_MAX_STREAMS,
+} from '../src/host-bridge.js';
 import {
   decodeClientFrame,
   decodeHostFrame,
@@ -20,6 +27,7 @@ import { generateE2eeSecret } from '../src/state.js';
 import {
   createConcurrencySemaphore,
   createTunnelEventSource,
+  MAX_LONG_LIVED_STREAMS as CLIENT_MAX_LONG_LIVED_STREAMS,
   MAX_STREAMS as CLIENT_MAX_STREAMS,
   TunnelClient,
 } from '../web-src/dsh-remote-entry.mjs';
@@ -125,10 +133,15 @@ function createConnectedTunnel(localOrigin, extraBridgeOptions = {}, extraTarget
   return { bridge, tunnel, secret };
 }
 
-test('protocol: MSG_HTTP_RES_WINDOW (0x17) round-trip and MAX_STREAMS=64', () => {
+test('protocol: MSG_HTTP_RES_WINDOW (0x17) round-trip and decoupled stream limits (HTTP 256 / long-lived 64)', () => {
   assert.equal(MSG_HTTP_RES_WINDOW, 0x17);
-  assert.equal(HOST_MAX_STREAMS, 64);
-  assert.equal(CLIENT_MAX_STREAMS, 64);
+  assert.equal(HOST_MAX_STREAMS, 256);
+  assert.equal(CLIENT_MAX_STREAMS, 256);
+  assert.equal(MAX_HTTP_STREAMS, 256);
+  assert.equal(MAX_SESSION_HTTP_STREAMS, 128);
+  assert.equal(MAX_LONG_LIVED_STREAMS, 64);
+  assert.equal(MAX_SESSION_LONG_LIVED_STREAMS, 32);
+  assert.equal(CLIENT_MAX_LONG_LIVED_STREAMS, 64);
   const encoded = encodeWindowUpdate(4 * 1024 * 1024);
   assert.equal(encoded.byteLength, 4);
   assert.equal(decodeWindowUpdate(encoded), 4 * 1024 * 1024);

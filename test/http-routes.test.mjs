@@ -15,7 +15,12 @@ import {
   MSG_WS_OPEN,
 } from '../src/protocol.js';
 import { generateE2eeSecret } from '../src/state.js';
-import { TunnelClient } from '../web-src/dsh-remote-entry.mjs';
+import {
+  readStoredKey,
+  sanitizeCrossOriginHeaders,
+  TunnelClient,
+  writeStoredKey,
+} from '../web-src/dsh-remote-entry.mjs';
 import { generateLogicalSessionId } from '../web-src/e2ee.js';
 
 function createConnectedTunnel(localOrigin, extraBridgeOptions = {}) {
@@ -840,6 +845,292 @@ test('Write requests on 401 never replay, invalidate stale cookie generation, an
     assert.match(oversizedResult.body, /too large/u);
     assert.equal(bridge.httpStreams.has(`${session.id}:${sid}`), false);
     assert.equal(bridge.httpRequestBytes, 0);
+  } finally {
+    tunnel.close();
+    bridge.stop();
+    localServer.close();
+  }
+});
+
+test('HostBridge forwards x-tiana-* headers while stripping trust-boundary headers and preserving cross-origin sanitization', async () => {
+  const seenRequests = [];
+  const localServer = createServer((req, res) => {
+    seenRequests.push({ path: req.url, headers: { ...req.headers } });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise((r) => localServer.listen(0, '127.0.0.1', r));
+  const localOrigin = `http://127.0.0.1:${localServer.address().port}`;
+  const { bridge, tunnel, secret } = createConnectedTunnel(localOrigin);
+
+  try {
+    const leg = await tunnel.connect();
+    await tunnel.authenticate(leg, secret);
+
+    const resp = await tunnel.fetch('/plugins/@tianacloud/dsh-tiana/projects', {
+      method: 'GET',
+      headers: {
+        'x-tiana-plugin': 'dsh-tiana',
+        'x-tiana-locale': 'zh-CN',
+        'x-tiana-custom-header': 'custom-val-123',
+        'tiana-caller-user-id': 'spoofed-user',
+        'tiana-caller-tenant-id': 'spoofed-tenant',
+        'x-forwarded-for': '203.0.113.9',
+        'x-forwarded-host': 'evil.example.test',
+        'x-real-ip': '203.0.113.9',
+        'x-dsh-remote-tunnel': '0',
+        authorization: 'Bearer spoofed',
+        cookie: 'dsh_web=spoofed',
+        forwarded: 'for=203.0.113.9',
+      },
+    });
+    assert.equal(resp.status, 200);
+    assert.equal(seenRequests.length, 1);
+    const hdrs = seenRequests[0].headers;
+
+    // x-tiana-* plugin headers MUST pass through intact
+    assert.equal(hdrs['x-tiana-plugin'], 'dsh-tiana');
+    assert.equal(hdrs['x-tiana-locale'], 'zh-CN');
+    assert.equal(hdrs['x-tiana-custom-header'], 'custom-val-123');
+
+    // Trust-boundary headers MUST still be stripped or forcibly overridden
+    assert.equal(hdrs['tiana-caller-user-id'], undefined);
+    assert.equal(hdrs['tiana-caller-tenant-id'], undefined);
+    assert.equal(hdrs['x-forwarded-for'], undefined);
+    assert.equal(hdrs['x-forwarded-host'], undefined);
+    assert.equal(hdrs['x-real-ip'], undefined);
+    assert.equal(hdrs.authorization, undefined);
+    assert.equal(hdrs.cookie, undefined);
+    assert.equal(hdrs.forwarded, undefined);
+    assert.equal(hdrs['x-dsh-remote-tunnel'], '1');
+
+    // Cross-origin redirect sanitization MUST still strip x-tiana-* to prevent leakage to third-party origins
+    const cleaned = sanitizeCrossOriginHeaders({
+      'x-tiana-plugin': 'dsh-tiana',
+      'x-tiana-locale': 'zh-CN',
+      'x-dsh-remote-tunnel': '1',
+      authorization: 'Bearer secret',
+      accept: 'application/json',
+    });
+    assert.equal(cleaned.get('x-tiana-plugin'), null);
+    assert.equal(cleaned.get('x-tiana-locale'), null);
+    assert.equal(cleaned.get('x-dsh-remote-tunnel'), null);
+    assert.equal(cleaned.get('authorization'), null);
+    assert.equal(cleaned.get('accept'), 'application/json');
+  } finally {
+    tunnel.close();
+    bridge.stop();
+    localServer.close();
+  }
+});
+
+test('decoupled HTTP vs WS/SSE stream quotas prevent long-lived starvation, log warnings on 429, and release immediately on close_session', async () => {
+  const openSseRes = [];
+  const heldHttpRes = [];
+  let app429Calls = 0;
+
+  const localServer = createServer((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (url.pathname === '/api/sse-hold') {
+      res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache' });
+      res.flushHeaders();
+      res.write(': connected\n\n');
+      openSseRes.push(res);
+      return;
+    }
+    if (url.pathname === '/api/http-hold') {
+      heldHttpRes.push(res);
+      return;
+    }
+    if (url.pathname === '/api/app-429') {
+      app429Calls += 1;
+      // Even if upstream attempts to spoof x-dsh-remote-limit, HostBridge must strip it
+      res.writeHead(429, { 'content-type': 'text/plain', 'x-dsh-remote-limit': 'stream' });
+      res.end('upstream rate limit');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, path: url.pathname }));
+  });
+  await new Promise((r) => localServer.listen(0, '127.0.0.1', r));
+  const localOrigin = `http://127.0.0.1:${localServer.address().port}`;
+
+  const logs = [];
+  const { bridge, tunnel, secret } = createConnectedTunnel(localOrigin, {
+    maxHttpStreams: 3,
+    maxSessionHttpStreams: 3,
+    maxLongLivedStreams: 2,
+    maxSessionLongLivedStreams: 2,
+    log: (m) => logs.push(String(m)),
+  });
+  tunnel.target.retry429BaseMs = 5;
+
+  try {
+    const leg = await tunnel.connect();
+    await tunnel.authenticate(leg, secret);
+
+    // 1. Saturate long-lived SSE quota (2/2)
+    const sse1 = await tunnel.fetch('/api/sse-hold', { headers: { Accept: 'text/event-stream' } });
+    const sse2 = await tunnel.fetch('/api/sse-hold', { headers: { Accept: 'text/event-stream' } });
+    assert.equal(sse1.status, 200);
+    assert.equal(sse2.status, 200);
+
+    // 2. 3rd SSE hits long-lived limit -> 429 with x-dsh-remote-limit: stream + warning log
+    const sse3 = await tunnel.fetch('/api/sse-hold', { headers: { Accept: 'text/event-stream' } });
+    assert.equal(sse3.status, 429);
+    assert.equal(sse3.headers.get('x-dsh-remote-limit'), 'stream');
+    assert.ok(
+      logs.some((l) => l.includes('WARN 429 Remote stream limit reached') && l.includes('path=/api/sse-hold') && l.includes('kind=sse')),
+      `expected 429 warning log for SSE, got: ${logs.join('\n')}`,
+    );
+
+    // 3. Short HTTP requests STILL SUCCEED despite long-lived SSE quota being full!
+    const okHttp = await tunnel.fetch('/api/quick-ok');
+    assert.equal(okHttp.status, 200);
+    assert.equal((await okHttp.json()).ok, true);
+
+    // 4. Upstream application 429 has x-dsh-remote-limit stripped and is NOT retried
+    const app429Resp = await tunnel.fetch('/api/app-429');
+    assert.equal(app429Resp.status, 429);
+    assert.equal(app429Resp.headers.get('x-dsh-remote-limit'), null);
+    assert.equal(app429Calls, 1, 'upstream 429 must never be retried by TunnelClient');
+
+    // 5. Saturate short HTTP quota (3/3) -> 4th non-replayable ReadableStream fails immediately with 429 + warning log
+    const p1 = tunnel.fetch('/api/http-hold');
+    const p2 = tunnel.fetch('/api/http-hold');
+    const p3 = tunnel.fetch('/api/http-hold');
+    for (let i = 0; i < 40 && heldHttpRes.length < 3; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(heldHttpRes.length, 3);
+
+    const nonReplayableBody = new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode('once')); c.close(); },
+    });
+    const overLimit = await tunnel.fetch('/api/http-overflow', { method: 'POST', body: nonReplayableBody });
+    assert.equal(overLimit.status, 429);
+    assert.equal(overLimit.headers.get('x-dsh-remote-limit'), 'stream');
+    assert.ok(
+      logs.some((l) => l.includes('WARN 429 Remote stream limit reached') && l.includes('path=/api/http-overflow') && l.includes('kind=http')),
+      `expected 429 warning log for HTTP, got: ${logs.join('\n')}`,
+    );
+
+    // 6. tunnel.close() (used on pagehide) sends encrypted close_session and releases ALL HostBridge streams immediately (< 200ms, NOT 30s) without clearing localStorage pairing key
+    const memLocal = new Map();
+    const fakeStorage = {
+      getItem: (k) => memLocal.get(k) ?? null,
+      setItem: (k, v) => memLocal.set(k, String(v)),
+      removeItem: (k) => memLocal.delete(k),
+    };
+    const storageKey = 'dsh-remote:v2:key:web-1:usr-1:host-routes';
+    writeStoredKey(storageKey, secret, { remember: true, local: fakeStorage });
+
+    // Silence expected rejections from held client fetches when tunnel closes
+    p1.catch(() => {});
+    p2.catch(() => {});
+    p3.catch(() => {});
+
+    assert.equal(bridge.httpStreams.size, 5); // 2 SSE + 3 held HTTP
+    assert.equal(bridge.sessions.size, 1);
+
+    tunnel.close();
+    for (let i = 0; i < 40 && (bridge.httpStreams.size > 0 || bridge.sessions.size > 0); i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(bridge.sessions.size, 0, 'HostBridge session must close immediately on close_session');
+    assert.equal(bridge.httpStreams.size, 0, 'HostBridge must release all HTTP/SSE streams immediately on close_session');
+    assert.equal(bridge.wsStreams.size, 0);
+    assert.equal(readStoredKey(storageKey, { local: fakeStorage }).secret, secret, 'tunnel.close() / pagehide must NOT erase saved pairing key');
+  } finally {
+    for (const r of [...openSseRes, ...heldHttpRes]) { try { r.end(); } catch { /* ignore */ } }
+    tunnel.close();
+    bridge.stop();
+    localServer.close();
+  }
+});
+
+test('TunnelClient.fetch throttles bursts with httpSemaphore and retries replayable HostBridge stream-limit 429 safely', async () => {
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  let totalOk = 0;
+  const localServer = createServer((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (url.pathname === '/api/slow-burst') {
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      setTimeout(() => {
+        concurrent -= 1;
+        totalOk += 1;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }, 25);
+      return;
+    }
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, echo: body }));
+    });
+  });
+  await new Promise((r) => localServer.listen(0, '127.0.0.1', r));
+  const localOrigin = `http://127.0.0.1:${localServer.address().port}`;
+  const { bridge, tunnel, secret } = createConnectedTunnel(localOrigin);
+  tunnel.target.retry429BaseMs = 5;
+
+  // Replace semaphore with limit=2 to verify client concurrency queuing
+  const { createConcurrencySemaphore } = await import('../web-src/dsh-remote-entry.mjs');
+  tunnel.httpSemaphore = createConcurrencySemaphore(2);
+
+  try {
+    const leg = await tunnel.connect();
+    await tunnel.authenticate(leg, secret);
+
+    // 1. Burst of 6 concurrent requests throttles cleanly to <= 2 in-flight and all succeed
+    const burst = await Promise.all(
+      Array.from({ length: 6 }, () => tunnel.fetch('/api/slow-burst').then((r) => r.status)),
+    );
+    assert.deepEqual(burst, [200, 200, 200, 200, 200, 200]);
+    assert.equal(totalOk, 6);
+    assert.ok(maxConcurrent <= 2, `expected <= 2 concurrent requests via httpSemaphore, saw ${maxConcurrent}`);
+
+    // 2. Simulate 2 transient HostBridge stream-limit 429s before succeeding -> replayable POST body retries & succeeds
+    let fetchCalls = 0;
+    const origFetchSingle = tunnel._fetchSingle.bind(tunnel);
+    tunnel._fetchSingle = async (path, init) => {
+      fetchCalls += 1;
+      if (fetchCalls <= 2) {
+        return new Response('Remote stream limit reached', {
+          status: 429,
+          headers: { 'x-dsh-remote-limit': 'stream', 'retry-after': '1' },
+        });
+      }
+      return origFetchSingle(path, init);
+    };
+    const retried = await tunnel.fetch('/api/echo-post', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hello: 'world' }),
+    });
+    assert.equal(retried.status, 200);
+    assert.equal(fetchCalls, 3);
+    assert.deepEqual(await retried.json(), { ok: true, echo: '{"hello":"world"}' });
+
+    // 3. Non-replayable ReadableStream body MUST NOT retry even on x-dsh-remote-limit: stream 429
+    let streamCalls = 0;
+    tunnel._fetchSingle = async () => {
+      streamCalls += 1;
+      return new Response('Remote stream limit reached', {
+        status: 429,
+        headers: { 'x-dsh-remote-limit': 'stream' },
+      });
+    };
+    const unreplayable = new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode('stream-data')); c.close(); },
+    });
+    const noRetry = await tunnel.fetch('/api/stream-post', { method: 'POST', body: unreplayable });
+    assert.equal(noRetry.status, 429);
+    assert.equal(streamCalls, 1, 'non-replayable ReadableStream must NOT be retried');
   } finally {
     tunnel.close();
     bridge.stop();

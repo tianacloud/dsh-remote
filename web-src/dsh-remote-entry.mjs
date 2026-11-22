@@ -51,8 +51,9 @@ const nativeEventSource = typeof globalThis.EventSource === 'function' ? globalT
 const nativeSwRegister = typeof navigator !== 'undefined' && typeof navigator.serviceWorker?.register === 'function'
   ? navigator.serviceWorker.register.bind(navigator.serviceWorker) : null;
 
-export const MAX_STREAMS = 64;
-const SUBRESOURCE_CONCURRENCY = 16, MAX_REQUEST_BYTES = 16 << 20, MAX_RESPONSE_BUFFER_BYTES = 16 << 20,
+export const MAX_STREAMS = 256, MAX_LONG_LIVED_STREAMS = 64;
+const SUBRESOURCE_CONCURRENCY = 16, HTTP_CONCURRENCY = 64, RETRY_429_MAX = 3, RETRY_429_BASE_MS = 120,
+  MAX_REQUEST_BYTES = 16 << 20, MAX_RESPONSE_BUFFER_BYTES = 16 << 20,
   DEFAULT_WINDOW_BYTES = 4 << 20, WINDOW_REFILL_THRESHOLD = 512 << 10, RESPONSE_IDLE_TIMEOUT_MS = 300_000,
   MAX_REDIRECT_HOPS = 5, SW_READY_TIMEOUT_MS = 1500, RECONNECT_BANNER_DELAY_MS = 800;
 
@@ -208,6 +209,7 @@ export class TunnelClient {
     this.rttMs = null;
     this.rttTimer = null;
     this.subresourceSemaphore = createConcurrencySemaphore(options.subresourceConcurrency ?? SUBRESOURCE_CONCURRENCY);
+    this.httpSemaphore = createConcurrencySemaphore(options.httpConcurrency ?? HTTP_CONCURRENCY);
   }
 
   failActiveStreams(err, wsCode = 1006, wsReason = 'Tunnel error') {
@@ -562,10 +564,10 @@ export class TunnelClient {
 
   async lock() {
     await this.transport?.control({ type: 'close_session' }).catch(() => {});
-    this.close();
+    this.close(undefined, { notifyHost: false });
   }
 
-  close(error = new Error('远程连接已关闭')) {
+  close(error = new Error('远程连接已关闭'), { notifyHost = true } = {}) {
     if (this.closed) return;
     this.closed = true;
     this.secret = undefined;
@@ -573,8 +575,29 @@ export class TunnelClient {
     clearTimeout(this.renewTimer);
     clearTimeout(this.reconnectTimer);
     clearInterval(this.rttTimer);
-    this.retire(error);
-    for (const leg of this.legs) leg.ws.close();
+    const old = this.transport, leg = this.leg, peer = this.peer;
+    const extraLegs = [...this.legs].filter((l) => l !== leg);
+    this.transport = null;
+    this.leg = null;
+    this.peer = null;
+    clearTimeout(this.graceTimer);
+    this.failActiveStreams(error, 1006, 'Remote generation ended');
+    for (const l of extraLegs) l.ws.close();
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      leg?.ws.close();
+      void peer?.stop().catch(() => {});
+      old?.close(error);
+    };
+    if (notifyHost && old?.live()) {
+      const t = setTimeout(finish, 150);
+      t.unref?.();
+      void old.control({ type: 'close_session' }).catch(() => {}).finally(() => { clearTimeout(t); finish(); });
+    } else {
+      finish();
+    }
   }
 
   sendAppFrame(streamId, msgType, payload, signal, generation = this.transport) {
@@ -673,15 +696,29 @@ export class TunnelClient {
     }
 
     const fetchExternal = init._externalFetch || nativeFetch;
+    const retryBaseMs = this.target.retry429BaseMs ?? RETRY_429_BASE_MS;
 
     for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop += 1) {
-      const resp = await this._fetchSingle(currentPath, {
-        ...init,
-        _sourceRequest: undefined,
-        method: currentMethod,
-        body: currentBody,
-        headers: currentHeaders,
-      });
+      let resp;
+      for (let attempt = 0; ; attempt += 1) {
+        resp = await this._fetchSingle(currentPath, {
+          ...init,
+          _sourceRequest: undefined,
+          method: currentMethod,
+          body: currentBody,
+          headers: currentHeaders,
+        });
+        if (resp.status !== 429 || resp.headers.get('x-dsh-remote-limit') !== 'stream' ||
+            bodyIsUnreplayableStream || attempt >= RETRY_429_MAX) break;
+        await resp.body?.cancel().catch(() => {});
+        const delayMs = retryBaseMs * (1 << attempt);
+        await new Promise((resolve, reject) => {
+          if (init.signal?.aborted) { reject(init.signal.reason ?? new DOMException('Aborted', 'AbortError')); return; }
+          const onAbort = () => { clearTimeout(t); reject(init.signal.reason ?? new DOMException('Aborted', 'AbortError')); };
+          const t = setTimeout(() => { init.signal?.removeEventListener('abort', onAbort); resolve(); }, delayMs);
+          init.signal?.addEventListener('abort', onAbort, { once: true });
+        });
+      }
 
       const isRedirect = resp.status === 301 || resp.status === 302 || resp.status === 303 ||
         resp.status === 307 || resp.status === 308;
@@ -791,7 +828,21 @@ export class TunnelClient {
     const method = (init.method || 'GET').toUpperCase();
     const signal = init.signal;
     const useSubresourceQueue = Boolean(init.subresource && (method === 'GET' || method === 'HEAD'));
-    const releasePermit = useSubresourceQueue ? await this.subresourceSemaphore.acquire(signal) : null;
+    const accept = init.headers instanceof Headers
+      ? (init.headers.get('accept') || '')
+      : String(init.headers?.accept || init.headers?.Accept || '');
+    const isSseReq = accept.toLowerCase().includes('text/event-stream');
+    let releasePermit = null;
+    try {
+      releasePermit = useSubresourceQueue
+        ? await this.subresourceSemaphore.acquire(signal)
+        : (!isSseReq ? await this.httpSemaphore.acquire(signal) : null);
+    } catch (err) {
+      if (method !== 'GET' && method !== 'HEAD' && typeof ReadableStream !== 'undefined' && init.body instanceof ReadableStream) {
+        init.body.cancel(err).catch(() => {});
+      }
+      throw err;
+    }
 
     let permitReleased = false;
     const freePermit = () => {
@@ -805,7 +856,7 @@ export class TunnelClient {
       if (this.closed || !this.transport) {
         throw new Error('dsh-remote: tunnel is not connected');
       }
-      if (this.nextStreamId > 0xffffffff || this.httpStreams.size + this.wsStreams.size >= MAX_STREAMS) {
+      if (this.nextStreamId > 0xffffffff || this.httpStreams.size >= MAX_STREAMS) {
         throw new Error('Too many remote streams');
       }
       if (typeof pathAndQuery !== 'string') throw new TypeError('远程请求需要相对路径');
@@ -1099,7 +1150,7 @@ export class TunnelClient {
   }
 
   createWebSocket(targetUrl) {
-    if (this.nextStreamId > 0xffffffff || this.httpStreams.size + this.wsStreams.size >= MAX_STREAMS) {
+    if (this.nextStreamId > 0xffffffff || this.wsStreams.size >= MAX_LONG_LIVED_STREAMS) {
       throw new Error('Too many remote streams');
     }
     const streamId = this.nextStreamId++;

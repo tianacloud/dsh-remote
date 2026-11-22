@@ -31,7 +31,7 @@ npx --yes @tianacloud/dsh-remote@latest connect --app <appId>
 
 - **无密钥流式 Service Worker（`dsh-remote-sw.js`）**：零密钥、零 `CacheStorage` 持久化，支持原生 `<img>`（含客户端 `3xx` 跟随）、`<video>`／`<audio>` `Range`/`206 Partial Content`、流式 `<a download>` 与沙箱 `<iframe>`；所有合成响应强制附加 `X-Content-Type-Options: nosniff`、`Cache-Control: no-store`，并对 `image/svg+xml`、`text/html`、`application/xhtml+xml` 强制施加不含 `allow-same-origin` 的 `Content-Security-Policy: sandbox` 防 XSS。
 - **官方文件上传闭合**：入口挂载 `globalThis.__DSH_FILE_UPLOAD__ = { fetch: globalThis.fetch }`，使 `@deepseek-ai/dsh-client-file-upload` 直接走主线程加密隧道上传并保留 `AbortSignal` 即时取消。
-- **窗口流控与并发隔离**：单会话最大并发流 `MAX_STREAMS = 64`，SW 子资源只读请求独立并发队列（上限 `16`）；双端通过内层加密帧 `MSG_HTTP_RES_WINDOW (0x17)` 执行 `4 MiB` 接收窗口信用流控，大体积媒体暂停或拖动进度条内存占用有界且与旧版对端双向兼容。
+- **窗口流控与并发隔离**：HTTP 突发流上限 `MAX_HTTP_STREAMS = 256`（单会话 `128`），与长连接 WS／SSE 配额（`64`，单会话 `32`）解耦，SW 子资源只读请求独立并发队列（上限 `16`）；双端通过内层加密帧 `MSG_HTTP_RES_WINDOW (0x17)` 执行 `4 MiB` 接收窗口信用流控，大体积媒体暂停或拖动进度条内存占用有界且与旧版对端双向兼容。
 - **主线程 `EventSource`（SSE）与滑动活性保活**：主线程提供标准 W3C `EventSource` 桥接（具名事件、`Last-Event-ID` 重连、`retry:`、`close()` 即时 `MSG_HTTP_ABORT`）；`HostBridge` 采用流活动滑动 `5 分钟` 超时、对 `text/event-stream` 上游强制设置 `Accept-Encoding: identity`，并在上游静默每 `25s` 自动注入 `: keepalive\n` 心跳。
 - **无 SW 受限容器极简防御（方案 A）**：SW 注册限时 `1500 ms` 绝不阻塞启动；无 SW 环境下主线程上传、`fetch`（含 `3xx` 跟随）、`EventSource` 与 `/api/remote.mux` WebSocket 100% 可用，仅在工作台顶部展示可手动关闭的系统浏览器打开提示条。
 

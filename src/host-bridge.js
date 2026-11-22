@@ -39,7 +39,12 @@ const CHUNK_SIZE = 32 * 1024;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const MAX_REQUEST_CHUNKS = 1024;
 const MAX_HOST_REQUEST_BYTES = 32 * 1024 * 1024;
-export const MAX_STREAMS = 64;
+export const MAX_HTTP_STREAMS = 256;
+export const MAX_SESSION_HTTP_STREAMS = 128;
+export const MAX_LONG_LIVED_STREAMS = 64;
+export const MAX_SESSION_LONG_LIVED_STREAMS = 32;
+export const MAX_SESSIONS = 64;
+export const MAX_STREAMS = MAX_HTTP_STREAMS;
 const MIN_WINDOW_BYTES = 64 * 1024;
 const MAX_WINDOW_BYTES = 8 * 1024 * 1024;
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
@@ -283,6 +288,10 @@ export class HostBridge {
     this.authTimeoutMs = options.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
     this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
     this.sseKeepaliveMs = options.sseKeepaliveMs ?? DEFAULT_SSE_KEEPALIVE_MS;
+    this.maxHttpStreams = options.maxHttpStreams ?? MAX_HTTP_STREAMS;
+    this.maxSessionHttpStreams = options.maxSessionHttpStreams ?? MAX_SESSION_HTTP_STREAMS;
+    this.maxLongLivedStreams = options.maxLongLivedStreams ?? MAX_LONG_LIVED_STREAMS;
+    this.maxSessionLongLivedStreams = options.maxSessionLongLivedStreams ?? MAX_SESSION_LONG_LIVED_STREAMS;
     this.p2pEnabled = normalizeP2pEnabled(options.p2p ?? process.env.DSH_REMOTE_P2P);
     this.iceServers = this.p2pEnabled ? normalizeStun(options.stun ?? process.env.DSH_REMOTE_STUN) : [];
     this.createPeer = options.createPeer ?? ((config) => {
@@ -872,7 +881,7 @@ export class HostBridge {
         error.code = 'INCOMPATIBLE';
         throw error;
       }
-      if (this.sessions.size >= MAX_STREAMS) throw new Error('DSH remote session limit');
+      if (this.sessions.size >= MAX_SESSIONS) throw new Error('DSH remote session limit');
       const id = hello.logicalSessionId;
       const { hostHelloPayload, cipher } = await respondHostHandshake(this.e2eeSecret, payload, {
         hostId: this.hostId, webId: this.webId, tenantId: this.ownerTenantId, ownerUserId: this.ownerUserId,
@@ -944,7 +953,7 @@ export class HostBridge {
         return;
       }
       if (message.type !== 'open_session' || message.hostId !== this.hostId ||
-          this.relayLegs.has(id) || this.relayLegs.size >= MAX_STREAMS ||
+          this.relayLegs.has(id) || this.relayLegs.size >= MAX_SESSIONS ||
           !/^[A-Za-z0-9_-]{22}$/u.test(message.challenge)) return;
       const now = Date.now();
       const relayRemaining = Number.isSafeInteger(message.remainingMs) && message.remainingMs >= 0
@@ -1000,21 +1009,67 @@ export class HostBridge {
     }
   }
 
+  getStreamCounts(sessionId = null) {
+    let totalHttp = 0;
+    let totalSse = 0;
+    let sessionHttp = 0;
+    let sessionSse = 0;
+    const prefix = sessionId ? `${sessionId}:` : '';
+    for (const [k, entry] of this.httpStreams) {
+      const isMine = prefix ? k.startsWith(prefix) : false;
+      if (entry.isLongLived) {
+        totalSse += 1;
+        if (isMine) sessionSse += 1;
+      } else {
+        totalHttp += 1;
+        if (isMine) sessionHttp += 1;
+      }
+    }
+    const totalWs = this.wsStreams.size;
+    let sessionWs = 0;
+    if (prefix) {
+      for (const k of this.wsStreams.keys()) {
+        if (k.startsWith(prefix)) sessionWs += 1;
+      }
+    }
+    return {
+      totalHttp,
+      totalSse,
+      totalWs,
+      totalLongLived: totalSse + totalWs,
+      sessionHttp,
+      sessionSse,
+      sessionWs,
+      sessionLongLived: sessionSse + sessionWs,
+    };
+  }
+
   dispatchInnerFrame(sessionId, session, { streamId, msgType, payload }) {
     if (!session.allowed || streamId === 0) throw new Error('Invalid application stream');
     const key = `${sessionId}:${streamId}`;
 
     if (msgType === MSG_HTTP_REQ_HEAD) {
       if (this.httpStreams.has(key) || this.wsStreams.has(key)) throw new Error('Duplicate stream');
-      if (this.httpStreams.size + this.wsStreams.size >= MAX_STREAMS) {
-        this.sendHttpError(sessionId, streamId, 429, 'Remote stream limit reached');
-        return;
-      }
       let head;
       try {
         head = decodeJSON(payload);
       } catch {
         this.sendHttpError(sessionId, streamId, 400, 'Invalid HTTP head JSON');
+        return;
+      }
+      const acceptHeader = head?.headers?.accept ?? head?.headers?.Accept ?? '';
+      const isLongLived = String(acceptHeader).toLowerCase().includes('text/event-stream');
+      const counts = this.getStreamCounts(sessionId);
+      const limitHit = isLongLived
+        ? (counts.totalLongLived >= this.maxLongLivedStreams || counts.sessionLongLived >= this.maxSessionLongLivedStreams)
+        : (counts.totalHttp >= this.maxHttpStreams || counts.sessionHttp >= this.maxSessionHttpStreams);
+      if (limitHit) {
+        this.log(
+          `[dsh-remote] WARN 429 Remote stream limit reached (path=${typeof head?.path === 'string' ? head.path : ''}, kind=${isLongLived ? 'sse' : 'http'}, http=${counts.totalHttp}/${this.maxHttpStreams}, sessionHttp=${counts.sessionHttp}/${this.maxSessionHttpStreams}, sse=${counts.totalSse}, ws=${counts.totalWs}, longLived=${counts.totalLongLived}/${this.maxLongLivedStreams}, sessions=${this.sessions.size})`,
+        );
+        this.sendHttpError(sessionId, streamId, 429, 'Remote stream limit reached', {
+          headers: { 'x-dsh-remote-limit': 'stream', 'retry-after': '1' },
+        });
         return;
       }
       const hasWindow = Number.isInteger(head.windowBytes) && head.windowBytes > 0;
@@ -1024,6 +1079,7 @@ export class HostBridge {
 
       const entry = {
         head,
+        isLongLived,
         chunks: [],
         chunkCount: 0,
         totalBytes: 0,
@@ -1140,15 +1196,19 @@ export class HostBridge {
 
     if (msgType === MSG_WS_OPEN) {
       if (this.wsStreams.has(key) || this.httpStreams.has(key)) throw new Error('Duplicate stream');
-      if (this.httpStreams.size + this.wsStreams.size >= MAX_STREAMS) {
-        void this.sendStreamFrame(sessionId, streamId, MSG_WS_CLOSE, encodeJSON({ code: 1008, reason: 'Remote stream limit reached', wasClean: false }), session).catch(() => {});
-        return;
-      }
       let info;
       try {
         info = decodeJSON(payload);
       } catch {
         void this.sendStreamFrame(sessionId, streamId, MSG_WS_CLOSE, encodeJSON({ code: 1002, reason: 'Invalid WS open frame', wasClean: false })).catch(() => {});
+        return;
+      }
+      const counts = this.getStreamCounts(sessionId);
+      if (counts.totalLongLived >= this.maxLongLivedStreams || counts.sessionLongLived >= this.maxSessionLongLivedStreams) {
+        this.log(
+          `[dsh-remote] WARN WS Remote stream limit reached (path=${typeof info?.path === 'string' ? info.path : '/api/remote.mux'}, kind=ws, http=${counts.totalHttp}/${this.maxHttpStreams}, sse=${counts.totalSse}, ws=${counts.totalWs}, longLived=${counts.totalLongLived}/${this.maxLongLivedStreams}, sessionLongLived=${counts.sessionLongLived}/${this.maxSessionLongLivedStreams}, sessions=${this.sessions.size})`,
+        );
+        void this.sendStreamFrame(sessionId, streamId, MSG_WS_CLOSE, encodeJSON({ code: 1008, reason: 'Remote stream limit reached', wasClean: false }), session).catch(() => {});
         return;
       }
       const entry = { socket: null, fragments: new FragmentReader(), sendQueue: Promise.resolve() };
@@ -1241,13 +1301,13 @@ export class HostBridge {
     this.closeSessionStreamsOnly(sessionId);
   }
 
-  sendHttpError(sessionId, streamId, status, message, { forcePlaintext = false } = {}) {
+  sendHttpError(sessionId, streamId, status, message, { forcePlaintext = false, headers = {} } = {}) {
     const send = forcePlaintext
       ? (msgType, payload) => this.sendRawFrame(sessionId, streamId, msgType, payload)
       : (msgType, payload) => { void this.sendStreamFrame(sessionId, streamId, msgType, payload).catch(() => {}); };
     send(MSG_HTTP_RES_HEAD, encodeJSON({
       status,
-      headers: { 'content-type': 'text/plain; charset=utf-8' },
+      headers: { 'content-type': 'text/plain; charset=utf-8', ...headers },
     }));
     send(MSG_HTTP_RES_BODY, message);
     send(MSG_HTTP_RES_END);
@@ -1361,7 +1421,7 @@ export class HostBridge {
     const headers = new Headers();
     for (const [name, value] of incoming) {
       if (REQUEST_STRIPPED_HEADERS.has(name) || nominated.has(name) ||
-          name.startsWith('x-forwarded-') || name.startsWith('tiana-caller-') || name.startsWith('x-tiana-')) continue;
+          name.startsWith('x-forwarded-') || name.startsWith('tiana-caller-')) continue;
       headers.set(name, value);
     }
     headers.set('origin', targetUrl.origin);
@@ -1425,12 +1485,13 @@ export class HostBridge {
       const resHeaders = {};
       resp.headers.forEach((value, key) => {
         const lower = key.toLowerCase();
-        if (lower === 'set-cookie' || SHARED_HOP_BY_HOP_HEADERS.has(lower) || resNominated.has(lower)) return;
+        if (lower === 'set-cookie' || lower === 'x-dsh-remote-limit' || SHARED_HOP_BY_HOP_HEADERS.has(lower) || resNominated.has(lower)) return;
         resHeaders[lower] = value;
       });
 
       const isSse = resp.status === 200 && isEventStreamContentType(resHeaders['content-type']);
       if (isSse) {
+        entry.isLongLived = true;
         // Stripping Content-Length because keepalive comments may be injected at line boundaries
         delete resHeaders['content-length'];
       }
