@@ -178,7 +178,6 @@ try {
     const host = new HostBridge({
       ...target, localOrigin: local.origin, relayUrl, registrationKey, e2eeSecret: pairingKey,
       getLaunchToken: () => local.searchParams.get('token'), allowInsecureLoopback: true, stun: 'none', leaseMs,
-      frontendOptions: { allowlist: [fixtureId] },
       activeClientPath: (id) => id === fixtureId ? join(fixturePackage, 'client.js') : undefined,
     });
     const boot = host.collectIndexInjections.bind(host);

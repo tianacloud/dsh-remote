@@ -119,8 +119,8 @@ function isBlockedPluginsRoute(segments) {
  * - Blocks `/plugins` static bundles, chunks, assets, and `/plugins/events` HMR, while forwarding
  *   third-party plugin API routes such as `/plugins/<pkg>/<api>` and `/plugins/@scope/<pkg>/<api>`.
  * - Blocks `/api/tiana-remote/admin` and `/api/tiana-remote/admin/*` (returns `{ kind: 'forbidden' }` -> 403).
- * - Allows `/api/*` (including `/api/tiana-remote/status`, `/api/tiana-remote/public-status`, and
- *   `/api/tiana-remote/plugin-access`) and third-party plugin HTTP routes.
+ * - Allows `/api/*` (including `/api/tiana-remote/status` and `/api/tiana-remote/public-status`)
+ *   and third-party plugin HTTP routes.
  */
 export function classifyHttpRoute(pathAndQuery) {
   if (typeof pathAndQuery !== 'string' || !pathAndQuery.startsWith('/') ||
@@ -239,7 +239,6 @@ export class HostBridge {
     this.getLaunchToken = options.getLaunchToken || null;
     this.collectIndexInjections = options.collectIndexInjections || this.collectBrowserBoot.bind(this);
     this.frontend = new FrontendAssets({
-      allowlist: process.env.DSH_REMOTE_WEB_PLUGINS,
       activeClientPath: options.activeClientPath,
       ...options.frontendOptions,
     });
@@ -387,7 +386,7 @@ export class HostBridge {
     return { kicked };
   }
 
-  updateSettings({ hostName, p2pEnabled, stunUrls, pluginPolicy, allowedWebPlugins, relayToken } = {}) {
+  updateSettings({ hostName, p2pEnabled, stunUrls, relayToken } = {}) {
     if (typeof hostName === 'string' && hostName.trim()) {
       this.hostName = hostName.trim().slice(0, 128);
     }
@@ -396,11 +395,6 @@ export class HostBridge {
     }
     if (stunUrls !== undefined || p2pEnabled !== undefined) {
       this.iceServers = this.p2pEnabled ? normalizeStun(stunUrls ?? this.iceServers) : [];
-    }
-    if (pluginPolicy !== undefined) {
-      this.frontend.setPluginPolicy(pluginPolicy);
-    } else if (allowedWebPlugins !== undefined) {
-      this.frontend.setAllowlist(allowedWebPlugins);
     }
     if (typeof relayToken === 'string' && relayToken) {
       this.relayToken = relayToken;

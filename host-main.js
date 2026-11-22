@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, watch } from 'node:fs';
 import { dirname } from 'node:path';
-import { isProtectedWebPlugin, normalizePluginPolicy } from './src/frontend-assets.js';
 import { HostBridge } from './src/host-bridge.js';
 import { registerRemoteRoutes, registerWebServerRoutes } from './src/remote-api.js';
 import {
@@ -12,8 +11,6 @@ import {
   ensureE2eeConfig,
   loadNormalizedRemoteState,
   loadRemoteState,
-  PLUGIN_ACCESS_MODE_ALLOW_ALL,
-  PLUGIN_ACCESS_MODE_DENY_ALL,
   releaseBridgeOwnership,
   removeRuntimeInfo,
   saveRemoteState,
@@ -36,16 +33,6 @@ export const inject = ['webServer', 'connection'];
 const TOKEN_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const TOKEN_RENEW_LEAD_SECONDS = 7 * 86400;
 const BRIDGE_CONFLICT_RETRY_MS = 10_000;
-
-function computeEffectiveAllowedPlugins(installedWebPlugins, policy) {
-  const normalized = normalizePluginPolicy(policy);
-  if (normalized.mode === PLUGIN_ACCESS_MODE_ALLOW_ALL) {
-    const blocked = new Set(normalized.blockedWebPlugins);
-    return installedWebPlugins.filter((id) => !blocked.has(id));
-  }
-  const allowed = new Set(normalized.allowedWebPlugins);
-  return installedWebPlugins.filter((id) => allowed.has(id));
-}
 
 export function createHostController(options = {}) {
   const statePath = options.statePath || defaultStatePath();
@@ -85,22 +72,13 @@ export function createHostController(options = {}) {
       disabled: process.env.DSH_REMOTE_DISABLE === '1',
       p2p: process.env.DSH_REMOTE_P2P !== undefined,
       stun: process.env.DSH_REMOTE_STUN !== undefined,
-      allowedWebPlugins: process.env.DSH_REMOTE_WEB_PLUGINS !== undefined,
     };
   }
 
   function effectiveConfig(state) {
     const p2p = process.env.DSH_REMOTE_P2P ?? state?.network?.p2pEnabled ?? true;
     const stun = process.env.DSH_REMOTE_STUN ?? state?.network?.stunUrls ?? DEFAULT_STUN_URLS;
-    const envPlugins = process.env.DSH_REMOTE_WEB_PLUGINS;
-    const pluginPolicy = envPlugins !== undefined
-      ? normalizePluginPolicy(envPlugins)
-      : normalizePluginPolicy({
-          mode: state?.security?.pluginAccessMode,
-          blockedWebPlugins: state?.security?.blockedWebPlugins,
-          allowedWebPlugins: state?.security?.allowedWebPlugins,
-        });
-    return { p2p, stun, pluginPolicy };
+    return { p2p, stun };
   }
 
   function stateSignature(state) {
@@ -150,7 +128,6 @@ export function createHostController(options = {}) {
       webId: state.web?.id || '',
       p2p: eff.p2p,
       stun: eff.stun,
-      frontendOptions: { pluginPolicy: eff.pluginPolicy },
       log,
     };
   }
@@ -205,7 +182,7 @@ export function createHostController(options = {}) {
 
     const sig = stateSignature(state);
     if (!forceRestart && bridge && activeStateKey === sig && !bridge.terminalState) {
-      // Hot-update mutable settings (secret rotation, network, plugins) without dropping Relay WS
+      // Hot-update mutable settings (secret rotation, network) without dropping Relay WS
       const eff = effectiveConfig(state);
       if (bridge.e2eeSecret !== state.e2ee.secret) {
         await bridge.rotateE2eeSecret(state.e2ee.secret);
@@ -214,7 +191,6 @@ export function createHostController(options = {}) {
         hostName: state.host.hostName,
         p2pEnabled: eff.p2p,
         stunUrls: eff.stun,
-        pluginPolicy: eff.pluginPolicy,
         relayToken: state.function.token,
       });
       return;
@@ -307,45 +283,6 @@ export function createHostController(options = {}) {
     }
   }
 
-  async function listLocalWebPlugins() {
-    try {
-      const webServer = getWebServer();
-      const connection = getConnection();
-      if (!webServer || !connection) return [];
-      const rows = await webServer.collectIndexInjections(connection.browserPeer);
-      const graph = rows?.find((r) => r.kind === 'global' && r.name === '__DSH_BOOT__')?.value;
-      if (!Array.isArray(graph?.entries)) return [];
-      return graph.entries
-        .map((e) => e.id)
-        .filter((id) => typeof id === 'string' && !isProtectedWebPlugin(id));
-    } catch {
-      return [];
-    }
-  }
-
-  function buildPluginAccessSnapshot(state, installedWebPlugins) {
-    const mode = state?.security?.pluginAccessMode === PLUGIN_ACCESS_MODE_DENY_ALL
-      ? PLUGIN_ACCESS_MODE_DENY_ALL
-      : PLUGIN_ACCESS_MODE_ALLOW_ALL;
-    const blockedWebPlugins = Array.isArray(state?.security?.blockedWebPlugins)
-      ? state.security.blockedWebPlugins.filter((id) => !isProtectedWebPlugin(id))
-      : [];
-    const allowedWebPlugins = Array.isArray(state?.security?.allowedWebPlugins)
-      ? state.security.allowedWebPlugins.filter((id) => !isProtectedWebPlugin(id))
-      : [];
-    const eff = effectiveConfig(state);
-    return {
-      ok: true,
-      mode,
-      blockedWebPlugins,
-      allowedWebPlugins,
-      installedWebPlugins,
-      effectiveMode: eff.pluginPolicy.mode,
-      effectiveAllowedPlugins: computeEffectiveAllowedPlugins(installedWebPlugins, eff.pluginPolicy),
-      envOverride: process.env.DSH_REMOTE_WEB_PLUGINS !== undefined,
-    };
-  }
-
   const controller = {
     getBridge: () => bridge,
 
@@ -399,50 +336,6 @@ export function createHostController(options = {}) {
       };
     },
 
-    async getPluginAccess() {
-      const state = loadNormalizedRemoteState(statePath);
-      const installedWebPlugins = await listLocalWebPlugins();
-      return buildPluginAccessSnapshot(state, installedWebPlugins);
-    },
-
-    async updatePluginAccess(patch = {}) {
-      const saved = await withStateLock(() => {
-        const state = loadNormalizedRemoteState(statePath);
-        if (!state) throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
-        const nextSecurity = {
-          ...(state.security && typeof state.security === 'object' ? state.security : {}),
-        };
-        if (patch.mode !== undefined) {
-          nextSecurity.pluginAccessMode = patch.mode === PLUGIN_ACCESS_MODE_DENY_ALL
-            ? PLUGIN_ACCESS_MODE_DENY_ALL
-            : PLUGIN_ACCESS_MODE_ALLOW_ALL;
-        }
-        if (patch.blockedWebPlugins !== undefined) {
-          nextSecurity.blockedWebPlugins = [...new Set(
-            patch.blockedWebPlugins.map((p) => String(p).trim()).filter((p) => p && !isProtectedWebPlugin(p)),
-          )];
-        }
-        if (patch.allowedWebPlugins !== undefined) {
-          nextSecurity.allowedWebPlugins = [...new Set(
-            patch.allowedWebPlugins.map((p) => String(p).trim()).filter((p) => p && !isProtectedWebPlugin(p)),
-          )];
-          state.allowedWebPlugins = nextSecurity.allowedWebPlugins;
-        }
-        state.security = nextSecurity;
-        state.updatedAt = new Date().toISOString();
-        saveRemoteState(state, statePath);
-        return state;
-      }, statePath);
-
-      if (bridge) {
-        const eff = effectiveConfig(saved);
-        bridge.updateSettings({ pluginPolicy: eff.pluginPolicy });
-      }
-
-      const installedWebPlugins = await listLocalWebPlugins();
-      return buildPluginAccessSnapshot(saved, installedWebPlugins);
-    },
-
     async getAdminOverview() {
       const state = loadNormalizedRemoteState(statePath);
       const snap = bridge?.getStatusSnapshot() || {
@@ -472,8 +365,6 @@ export function createHostController(options = {}) {
       } catch {
         // leave loggedIn: false
       }
-      const installedWebPlugins = await listLocalWebPlugins();
-      const pluginAccess = buildPluginAccessSnapshot(state, installedWebPlugins);
       const configured = Boolean(state?.function?.url && state?.web?.id && state?.host?.hostId);
       return {
         ok: true,
@@ -512,14 +403,6 @@ export function createHostController(options = {}) {
           createdAt: state.e2ee.createdAt,
         } : null,
         network: state?.network || { p2pEnabled: true, stunUrls: [...DEFAULT_STUN_URLS] },
-        security: state?.security || {
-          pluginAccessMode: PLUGIN_ACCESS_MODE_ALLOW_ALL,
-          blockedWebPlugins: [],
-          allowedWebPlugins: [],
-        },
-        pluginAccess,
-        allowedWebPlugins: state?.security?.allowedWebPlugins || [],
-        installedWebPlugins,
       };
     },
 
@@ -603,28 +486,6 @@ export function createHostController(options = {}) {
             stunUrls: patch.stunUrls !== undefined ? patch.stunUrls : state.network.stunUrls,
           };
         }
-        if (patch.pluginAccessMode !== undefined || patch.blockedWebPlugins !== undefined || patch.allowedWebPlugins !== undefined) {
-          const nextSecurity = {
-            ...(state.security && typeof state.security === 'object' ? state.security : {}),
-          };
-          if (patch.pluginAccessMode !== undefined) {
-            nextSecurity.pluginAccessMode = patch.pluginAccessMode === PLUGIN_ACCESS_MODE_DENY_ALL
-              ? PLUGIN_ACCESS_MODE_DENY_ALL
-              : PLUGIN_ACCESS_MODE_ALLOW_ALL;
-          }
-          if (patch.blockedWebPlugins !== undefined) {
-            nextSecurity.blockedWebPlugins = [...new Set(
-              patch.blockedWebPlugins.map((p) => String(p).trim()).filter((p) => p && !isProtectedWebPlugin(p)),
-            )];
-          }
-          if (patch.allowedWebPlugins !== undefined) {
-            nextSecurity.allowedWebPlugins = [...new Set(
-              patch.allowedWebPlugins.map((p) => String(p).trim()).filter((p) => p && !isProtectedWebPlugin(p)),
-            )];
-            state.allowedWebPlugins = nextSecurity.allowedWebPlugins;
-          }
-          state.security = nextSecurity;
-        }
         state.updatedAt = new Date().toISOString();
         saveRemoteState(state, statePath);
         return state;
@@ -636,7 +497,6 @@ export function createHostController(options = {}) {
           hostName: saved.host?.hostName,
           p2pEnabled: eff.p2p,
           stunUrls: eff.stun,
-          pluginPolicy: eff.pluginPolicy,
         });
       }
 
@@ -660,7 +520,6 @@ export function createHostController(options = {}) {
       return {
         host: { hostId: saved.host?.hostId, hostName: saved.host?.hostName },
         network: saved.network,
-        security: saved.security,
       };
     },
 

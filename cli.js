@@ -181,7 +181,6 @@ async function cmdStatus(flags) {
     },
     web: state.web && { id: state.web.id, endpoint: state.web.endpoint, name: state.web.name },
     network: state.network,
-    security: state.security,
   } : null;
 
   const summary = {
@@ -313,9 +312,6 @@ async function cmdStart(flags) {
     webId: state.web?.id,
     p2p: process.env.DSH_REMOTE_P2P ?? state.network?.p2pEnabled,
     stun: process.env.DSH_REMOTE_STUN ?? state.network?.stunUrls,
-    frontendOptions: {
-      allowlist: process.env.DSH_REMOTE_WEB_PLUGINS ?? state.security?.allowedWebPlugins,
-    },
   });
 
   const stop = () => {

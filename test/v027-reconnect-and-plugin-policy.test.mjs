@@ -13,8 +13,6 @@ import {
   resolveDshPackageDirs,
 } from '../src/dsh-packages.js';
 import {
-  PLUGIN_ACCESS_MODE_ALLOW_ALL,
-  PLUGIN_ACCESS_MODE_DENY_ALL,
   migrateRemoteState,
   claimBridgeOwnership,
   releaseBridgeOwnership,
@@ -23,12 +21,7 @@ import {
   saveRemoteState,
   loadRemoteState,
 } from '../src/state.js';
-import {
-  isProtectedWebPlugin,
-  normalizePluginPolicy,
-  selectAllowedWebPlugins,
-  FrontendAssets,
-} from '../src/frontend-assets.js';
+import { FrontendAssets } from '../src/frontend-assets.js';
 import { HostBridge, classifyHttpRoute } from '../src/host-bridge.js';
 import { isTcpEndpointReachable } from '../src/connect.js';
 import { createHostController } from '../host-main.js';
@@ -96,31 +89,29 @@ test('v0.2.7: dsh-packages semver-sorts .pnpm entries desc and prefers active ds
   }
 });
 
-test('v0.2.7: state.js bridge ownership lock, runtime.json live-PID protection, and pluginAccessMode migration', async () => {
+test('v0.2.7: state.js bridge ownership lock, runtime.json live-PID protection, and legacy plugin-policy field stripping', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-state-v027-'));
   const statePath = join(dir, 'state.json');
   const runtimePath = join(dir, 'runtime.json');
   try {
-    // Migration defaults to allow_all while preserving saved allowedWebPlugins
+    // Legacy state with deprecated plugin-filter keys migrates cleanly without failing and strips deprecated fields
     const migrated = migrateRemoteState({
       version: 2,
-      security: { allowedWebPlugins: ['dshmarket'] },
-    });
-    assert.equal(migrated.security.pluginAccessMode, PLUGIN_ACCESS_MODE_ALLOW_ALL);
-    assert.deepEqual(migrated.security.blockedWebPlugins, []);
-    assert.deepEqual(migrated.security.allowedWebPlugins, ['dshmarket']);
-
-    const denyMigrated = migrateRemoteState({
-      version: 2,
+      host: { hostId: 'host-demo', hostName: 'Demo', registrationKey: 'reg-demo' },
+      pluginPolicy: { mode: 'deny_all', allowedWebPlugins: ['dshmarket'] },
+      allowedWebPlugins: ['dshmarket'],
+      blockedWebPlugins: ['ds-bot'],
       security: {
-        pluginAccessMode: PLUGIN_ACCESS_MODE_DENY_ALL,
+        pluginAccessMode: 'deny_all',
         blockedWebPlugins: ['ds-bot'],
         allowedWebPlugins: ['dshmarket'],
       },
     });
-    assert.equal(denyMigrated.security.pluginAccessMode, PLUGIN_ACCESS_MODE_DENY_ALL);
-    assert.deepEqual(denyMigrated.security.blockedWebPlugins, ['ds-bot']);
-    assert.deepEqual(denyMigrated.security.allowedWebPlugins, ['dshmarket']);
+    assert.equal(migrated.host.registrationKey, 'reg-demo');
+    assert.equal('pluginPolicy' in migrated, false);
+    assert.equal('allowedWebPlugins' in migrated, false);
+    assert.equal('blockedWebPlugins' in migrated, false);
+    assert.equal('security' in migrated, false);
 
     // Bridge ownership lock: acquire -> block second instance -> reclaim dead PID -> release
     const first = await claimBridgeOwnership({
@@ -182,89 +173,92 @@ test('v0.2.7: state.js bridge ownership lock, runtime.json live-PID protection, 
   }
 });
 
-test('v0.2.7: frontend-assets dual plugin policy (allow_all+blacklist, deny_all+whitelist, core protection, legacy compat)', () => {
-  const ids = [
-    '@deepseek-ai/dsh-workspace',
-    '@deepseek-ai/dsh-client-modules',
-    '@tianacloud/dsh-remote',
-    'dshmarket',
-    'ds-bot',
-    'dsh-codex-connect',
-    '@tianacloud/dsh-tiana',
-  ];
-  const modules = new Map(ids.map((id) => [id, { id }]));
+test('frontend-assets and HostBridge unconditionally allow all active third-party plugins regardless of DSH_REMOTE_WEB_PLUGINS', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-fa-all-plugins-'));
+  const prevEnv = process.env.DSH_REMOTE_WEB_PLUGINS;
+  try {
+    process.env.DSH_REMOTE_WEB_PLUGINS = 'none';
+    const frontendDir = join(dir, 'dsh-web-frontend');
+    mkdirSync(join(frontendDir, 'dist', 'assets'), { recursive: true });
+    writeFileSync(
+      join(frontendDir, 'dist', 'index.html'),
+      '<!doctype html><link rel="stylesheet" href="./assets/app.css"><script type="module" src="./assets/index.js"></script>',
+    );
+    writeFileSync(join(frontendDir, 'dist', 'assets', 'app.css'), 'body{margin:0}');
+    writeFileSync(
+      join(frontendDir, 'dist', 'assets', 'index.js'),
+      'const __e = new Function("ctx","expr",`return eval(expr)`); const __p=function(load,deps){let p=Promise.resolve();if(deps){new Event("vite:preloadError")}return p.then(()=>{return load().catch(err)})}; void __e; void __p;',
+    );
 
-  // Protected modules
-  assert.equal(isProtectedWebPlugin('@deepseek-ai/dsh-workspace'), true);
-  assert.equal(isProtectedWebPlugin('@tianacloud/dsh-remote'), true);
-  assert.equal(isProtectedWebPlugin('dshmarket'), false);
+    const makePkg = (id) => {
+      const pkgDir = join(dir, 'pkgs', id.replace('/', '__'));
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: id, exports: { './client': './client.js' } }));
+      const clientPath = join(pkgDir, 'client.js');
+      writeFileSync(clientPath, `window.__ModuleLoader__.load({id:${JSON.stringify(id)},factory(){return {};}});`);
+      return clientPath;
+    };
 
-  // Default policy (undefined) -> allow_all -> every plugin included
-  const def = selectAllowedWebPlugins(modules);
-  assert.deepEqual([...def].sort(), [...ids].sort());
+    const ids = [
+      '@deepseek-ai/dsh-workspace',
+      '@deepseek-ai/dsh-client-modules',
+      '@tianacloud/dsh-remote',
+      'dshmarket',
+      'ds-bot',
+      'dsh-codex-connect',
+      '@tianacloud/dsh-tiana',
+    ];
+    const clientPaths = new Map(ids.map((id) => [id, makePkg(id)]));
+    const bootRows = [{
+      kind: 'global',
+      name: '__DSH_BOOT__',
+      value: {
+        entries: ids.map((id, i) => ({
+          id,
+          url: `plugins/??${id}/client.js&rev=r${i}`,
+          rev: `r${i}`,
+        })),
+        batches: [],
+      },
+    }];
 
-  // allow_all + blacklist (cannot block core/self even if specified)
-  const blacklisted = selectAllowedWebPlugins(modules, {
-    mode: 'allow_all',
-    blockedWebPlugins: ['dshmarket', '@deepseek-ai/dsh-workspace', '@tianacloud/dsh-remote'],
-    allowedWebPlugins: ['ds-bot'],
-  });
-  assert.deepEqual([...blacklisted].sort(), [
-    '@deepseek-ai/dsh-workspace',
-    '@deepseek-ai/dsh-client-modules',
-    '@tianacloud/dsh-remote',
-    'ds-bot',
-    'dsh-codex-connect',
-    '@tianacloud/dsh-tiana',
-  ].sort());
+    const bridge = new HostBridge({
+      relayUrl: 'https://relay.example.test',
+      e2eeSecret: 'dshk1_testsecret',
+      hostId: 'host-demo',
+      hostName: 'HostDemo',
+      registrationKey: 'reg-1',
+      ownerUserId: 'u1',
+      ownerTenantId: 't1',
+      webId: 'web123456789',
+      localOrigin: 'http://127.0.0.1:3080',
+      frontendOptions: { frontend: frontendDir },
+      activeClientPath: (id) => clientPaths.get(id),
+      log: () => {},
+    });
 
-  // deny_all + whitelist
-  const whitelisted = selectAllowedWebPlugins(modules, {
-    mode: 'deny_all',
-    blockedWebPlugins: ['dshmarket'],
-    allowedWebPlugins: ['dshmarket', 'dsh-codex-connect'],
-  });
-  assert.deepEqual([...whitelisted].sort(), [
-    '@deepseek-ai/dsh-workspace',
-    '@deepseek-ai/dsh-client-modules',
-    '@tianacloud/dsh-remote',
-    'dshmarket',
-    'dsh-codex-connect',
-  ].sort());
-
-  // Legacy compat: [] -> deny_all, ['ds-bot'] -> deny_all+ds-bot, '*' -> allow_all
-  assert.equal(normalizePluginPolicy([]).mode, 'deny_all');
-  assert.deepEqual([...selectAllowedWebPlugins(modules, [])].sort(), [
-    '@deepseek-ai/dsh-workspace',
-    '@deepseek-ai/dsh-client-modules',
-    '@tianacloud/dsh-remote',
-  ].sort());
-  assert.deepEqual([...selectAllowedWebPlugins(modules, ['ds-bot'])].sort(), [
-    '@deepseek-ai/dsh-workspace',
-    '@deepseek-ai/dsh-client-modules',
-    '@tianacloud/dsh-remote',
-    'ds-bot',
-  ].sort());
-  assert.equal(normalizePluginPolicy('*').mode, 'allow_all');
-  assert.deepEqual([...selectAllowedWebPlugins(modules, '*')].sort(), [...ids].sort());
-
-  // FrontendAssets defaults to allow_all and updates policy via setPluginPolicy
-  const fa = new FrontendAssets();
-  assert.equal(fa.getPluginPolicy().mode, 'allow_all');
-  fa.setPluginPolicy({ mode: 'deny_all', allowedWebPlugins: ['dshmarket'], blockedWebPlugins: ['ds-bot'] });
-  assert.deepEqual(fa.getPluginPolicy(), {
-    mode: 'deny_all',
-    blockedWebPlugins: ['ds-bot'],
-    allowedWebPlugins: ['dshmarket'],
-  });
+    const snapshot = await bridge.frontend.prepare(bootRows);
+    assert.deepEqual(snapshot.manifest.boot.entries.map((e) => e.id).sort(), [...ids].sort());
+    for (const id of ids) {
+      assert.ok(snapshot.resources.has(`plugin:${id}/client.js`), `expected active plugin ${id} in manifest resources`);
+    }
+    // Removed plugin policy APIs must no longer exist on FrontendAssets
+    const fa = new FrontendAssets({ frontend: frontendDir });
+    assert.equal('setPluginPolicy' in fa, false);
+    assert.equal('getPluginPolicy' in fa, false);
+    assert.equal('setAllowlist' in fa, false);
+  } finally {
+    if (prevEnv === undefined) delete process.env.DSH_REMOTE_WEB_PLUGINS;
+    else process.env.DSH_REMOTE_WEB_PLUGINS = prevEnv;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
-test('v0.2.7: classifyHttpRoute forwards third-party plugin HTTP APIs and /api/tiana-remote/plugin-access while blocking plugin static bundles & admin APIs', () => {
+test('v0.2.7: classifyHttpRoute forwards third-party plugin HTTP APIs while blocking plugin static bundles & admin APIs', () => {
   // Plugin API routes must be forwarded
   assert.equal(classifyHttpRoute('/plugins/dsh-codex-connect/task')?.kind, 'forward');
   assert.equal(classifyHttpRoute('/plugins/dsh-openai-codex/auth/status')?.kind, 'forward');
   assert.equal(classifyHttpRoute('/plugins/@tianacloud/dsh-tiana/projects')?.kind, 'forward');
-  assert.equal(classifyHttpRoute('/api/tiana-remote/plugin-access')?.kind, 'forward');
   assert.equal(classifyHttpRoute('/api/tiana-remote/public-status')?.kind, 'forward');
 
   // Plugin bundle / asset / event routes MUST remain blocked (null -> 404)
@@ -421,32 +415,39 @@ test('v0.2.7: isTcpEndpointReachable detects live HTTPS/TCP listener even withou
   assert.equal(await isTcpEndpointReachable(`https://127.0.0.1:${port}`, { timeoutMs: 300 }), false);
 });
 
-test('v0.2.7: /api/tiana-remote/plugin-access works locally and over tunnel, updates HostBridge, and host-main surfaces bridgeConflict', async () => {
+test('plugin-access endpoint is removed, legacy state.json boots cleanly and drops deprecated keys on save, admin stays 403 over tunnel, and host-main surfaces bridgeConflict', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-api-v027-'));
   const statePath = join(dir, 'state.json');
   const runtimePath = join(dir, 'runtime.json');
+  const prevEnv = process.env.DSH_REMOTE_WEB_PLUGINS;
   try {
-    saveRemoteState({
+    process.env.DSH_REMOTE_WEB_PLUGINS = 'ds-bot';
+    // Seed a legacy state.json containing deprecated pluginPolicy / allowedWebPlugins / blockedWebPlugins keys
+    writeFileSync(statePath, `${JSON.stringify({
       version: 2,
       configVersion: 2,
       enabled: true,
-      host: { hostId: 'host-1', hostName: 'Host One', registrationKey: 'reg' },
-      owner: { userId: 'u1', tenantId: 't1', email: 'u@example.com' },
+      host: { hostId: 'host-1', hostName: 'Host One', registrationKey: 'reg-legacy-key' },
+      owner: { userId: 'u1', tenantId: 't1', email: 'u@example.test' },
       web: { id: 'web123456789', name: 'DSH Remote', endpoint: 'https://web123456789.example.test/web/web123456789/' },
       function: { id: 'fn-1', name: 'fn', url: 'https://fn.example.test', token: 'tok', expiresAt: Math.floor(Date.now() / 1000) + 30 * 86400 },
       e2ee: { secret: 'dshk1_abc', fingerprint: '11:22:33', algorithm: 'AES-256-GCM' },
-      network: { p2pEnabled: true, stunUrls: [] },
-      security: { pluginAccessMode: 'allow_all', blockedWebPlugins: [], allowedWebPlugins: [] },
-    }, statePath);
+      network: { p2pEnabled: true, stunUrls: ['stun:stun.cloudflare.com:3478'] },
+      pluginPolicy: { mode: 'deny_all', allowedWebPlugins: ['dshmarket'] },
+      allowedWebPlugins: ['dshmarket'],
+      blockedWebPlugins: ['ds-bot'],
+      security: { pluginAccessMode: 'deny_all', blockedWebPlugins: ['ds-bot'], allowedWebPlugins: ['dshmarket'] },
+    }, null, 2)}\n`, { mode: 0o600 });
 
-    const appliedPolicies = [];
+    const bridgeConfigs = [];
+    const appliedSettings = [];
     const fakeBridge = {
       registered: true,
       e2eeSecret: 'dshk1_abc',
       start() {},
       stop() {},
       updateSettings(s) {
-        if (s.pluginPolicy) appliedPolicies.push(s.pluginPolicy);
+        appliedSettings.push(s);
       },
       getStatusSnapshot() {
         return { running: true, relayConnected: true, hostConflict: false, sessions: [] };
@@ -454,21 +455,6 @@ test('v0.2.7: /api/tiana-remote/plugin-access works locally and over tunnel, upd
     };
     const fakeWebServer = {
       getOrigin: () => 'http://127.0.0.1:3080',
-      async collectIndexInjections() {
-        return [{
-          kind: 'global',
-          name: '__DSH_BOOT__',
-          value: {
-            entries: [
-              { id: '@deepseek-ai/dsh-workspace' },
-              { id: '@tianacloud/dsh-remote' },
-              { id: 'dshmarket' },
-              { id: 'ds-bot' },
-              { id: 'dsh-codex-connect' },
-            ],
-          },
-        }];
-      },
     };
     const fakeConnection = {
       browserPeer: {},
@@ -480,7 +466,10 @@ test('v0.2.7: /api/tiana-remote/plugin-access works locally and over tunnel, upd
       statePath,
       runtimePath,
       disableBridgeLock: true,
-      createBridge: () => fakeBridge,
+      createBridge: (cfg) => {
+        bridgeConfigs.push(cfg);
+        return fakeBridge;
+      },
       getWebServer: () => fakeWebServer,
       getConnection: () => fakeConnection,
       log: () => {},
@@ -489,41 +478,23 @@ test('v0.2.7: /api/tiana-remote/plugin-access works locally and over tunnel, upd
 
     const handler = createRemoteApiHandler(controller, fakeConnection);
     try {
-      // 1. Remote tunnel GET /api/tiana-remote/plugin-access succeeds
-      const getTunnel = await handler(
+      // 1. Legacy state booted cleanly with existing bindings intact and no frontendOptions.pluginPolicy
+      assert.equal(bridgeConfigs.length, 1);
+      assert.equal(bridgeConfigs[0].registrationKey, 'reg-legacy-key');
+      assert.equal(bridgeConfigs[0].relayUrl, 'https://fn.example.test');
+      assert.equal(bridgeConfigs[0].webId, 'web123456789');
+      assert.equal(bridgeConfigs[0].frontendOptions, undefined);
+
+      // 2. Removed /api/tiana-remote/plugin-access returns null (unhandled -> 404)
+      const getRemoved = await handler(
         new Request('http://127.0.0.1:3080/api/tiana-remote/plugin-access', {
           headers: { 'x-dsh-remote-tunnel': '1' },
         }),
         { remoteAddress: '127.0.0.1', hostHeader: '127.0.0.1:3080', hasTunnelHeader: true },
       );
-      assert.equal(getTunnel.status, 200);
-      const initial = await getTunnel.json();
-      assert.equal(initial.mode, 'allow_all');
-      assert.deepEqual(initial.installedWebPlugins, ['dshmarket', 'ds-bot', 'dsh-codex-connect']);
-      assert.deepEqual(initial.effectiveAllowedPlugins, ['dshmarket', 'ds-bot', 'dsh-codex-connect']);
+      assert.equal(getRemoved, null);
 
-      // 2. Remote tunnel POST /api/tiana-remote/plugin-access switches to blacklist and updates bridge
-      const postTunnel = await handler(
-        new Request('http://127.0.0.1:3080/api/tiana-remote/plugin-access', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-dsh-remote-tunnel': '1' },
-          body: JSON.stringify({ mode: 'allow_all', blockedWebPlugins: ['ds-bot', '@tianacloud/dsh-remote'] }),
-        }),
-        { remoteAddress: '127.0.0.1', hostHeader: '127.0.0.1:3080', hasTunnelHeader: true },
-      );
-      assert.equal(postTunnel.status, 200);
-      const afterBlacklist = await postTunnel.json();
-      assert.equal(afterBlacklist.mode, 'allow_all');
-      assert.deepEqual(afterBlacklist.blockedWebPlugins, ['ds-bot']);
-      assert.deepEqual(afterBlacklist.effectiveAllowedPlugins, ['dshmarket', 'dsh-codex-connect']);
-      assert.deepEqual(appliedPolicies.at(-1), {
-        mode: 'allow_all',
-        blockedWebPlugins: ['ds-bot'],
-        allowedWebPlugins: [],
-      });
-
-      // 3. Local POST switches to deny_all + whitelist
-      const postLocal = await handler(
+      const postRemoved = await handler(
         new Request('http://127.0.0.1:3080/api/tiana-remote/plugin-access', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -531,14 +502,53 @@ test('v0.2.7: /api/tiana-remote/plugin-access works locally and over tunnel, upd
         }),
         { remoteAddress: '127.0.0.1', hostHeader: '127.0.0.1:3080', hasTunnelHeader: false },
       );
-      assert.equal(postLocal.status, 200);
-      const afterWhitelist = await postLocal.json();
-      assert.equal(afterWhitelist.mode, 'deny_all');
-      assert.deepEqual(afterWhitelist.allowedWebPlugins, ['dshmarket']);
-      assert.deepEqual(afterWhitelist.effectiveAllowedPlugins, ['dshmarket']);
-      assert.equal(loadRemoteState(statePath).security.pluginAccessMode, 'deny_all');
+      assert.equal(postRemoved, null);
 
-      // 4. Admin API MUST still return 403 over tunnel
+      // 3. Admin overview omits pluginAccess / allowedWebPlugins / security and ignores DSH_REMOTE_WEB_PLUGINS
+      const localOverviewResp = await handler(
+        new Request('http://127.0.0.1:3080/api/tiana-remote/admin/overview'),
+        { remoteAddress: '127.0.0.1', hostHeader: '127.0.0.1:3080', hasTunnelHeader: false },
+      );
+      assert.equal(localOverviewResp.status, 200);
+      const localOverview = await localOverviewResp.json();
+      assert.equal('pluginAccess' in localOverview, false);
+      assert.equal('allowedWebPlugins' in localOverview, false);
+      assert.equal('installedWebPlugins' in localOverview, false);
+      assert.equal('security' in localOverview, false);
+      assert.equal('allowedWebPlugins' in localOverview.envOverrides, false);
+
+      // 4. Updating admin settings saves clean state.json omitting deprecated plugin-filter fields while preserving bindings
+      const settingsResp = await handler(
+        new Request('http://127.0.0.1:3080/api/tiana-remote/admin/settings', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            p2pEnabled: false,
+            pluginAccessMode: 'deny_all',
+            allowedWebPlugins: ['dshmarket'],
+            blockedWebPlugins: ['ds-bot'],
+          }),
+        }),
+        { remoteAddress: '127.0.0.1', hostHeader: '127.0.0.1:3080', hasTunnelHeader: false },
+      );
+      assert.equal(settingsResp.status, 200);
+      const settingsJson = await settingsResp.json();
+      assert.equal(settingsJson.network.p2pEnabled, false);
+      assert.equal('security' in settingsJson, false);
+      assert.equal('pluginPolicy' in (appliedSettings.at(-1) || {}), false);
+
+      const persisted = loadRemoteState(statePath);
+      assert.equal(persisted.host.registrationKey, 'reg-legacy-key');
+      assert.equal(persisted.function.url, 'https://fn.example.test');
+      assert.equal(persisted.web.endpoint, 'https://web123456789.example.test/web/web123456789/');
+      assert.equal(persisted.network.p2pEnabled, false);
+      assert.equal('pluginPolicy' in persisted, false);
+      assert.equal('pluginAccessMode' in persisted, false);
+      assert.equal('allowedWebPlugins' in persisted, false);
+      assert.equal('blockedWebPlugins' in persisted, false);
+      assert.equal('security' in persisted, false);
+
+      // 5. Admin API MUST still return 403 over tunnel
       const adminOverTunnel = await handler(
         new Request('http://127.0.0.1:3080/api/tiana-remote/admin/overview', {
           headers: { 'x-dsh-remote-tunnel': '1' },
@@ -550,7 +560,7 @@ test('v0.2.7: /api/tiana-remote/plugin-access works locally and over tunnel, upd
       controller.dispose();
     }
 
-    // 5. Bridge lock conflict skips bridge startup and surfaces bridgeConflict in admin overview
+    // 6. Bridge lock conflict skips bridge startup and surfaces bridgeConflict in admin overview
     const existingClaim = await claimBridgeOwnership({
       instanceId: 'other-proc',
       hostId: 'host-1',
@@ -584,11 +594,13 @@ test('v0.2.7: /api/tiana-remote/plugin-access works locally and over tunnel, upd
       await releaseBridgeOwnership('other-proc', statePath);
     }
   } finally {
+    if (prevEnv === undefined) delete process.env.DSH_REMOTE_WEB_PLUGINS;
+    else process.env.DSH_REMOTE_WEB_PLUGINS = prevEnv;
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('v0.2.7: client.js renders dual-mode plugin policy card in BOTH remote and local views plus local bridgeConflict banner', async () => {
+test('client.js omits plugin access policy UI in both remote and local views while keeping local bridgeConflict banner', async () => {
   const clientCode = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 
   const findById = (node, id) => {
@@ -596,15 +608,6 @@ test('v0.2.7: client.js renders dual-mode plugin policy card in BOTH remote and 
     if (node.props?.id === id) return node;
     for (const child of node.children || []) {
       const hit = findById(child, id);
-      if (hit) return hit;
-    }
-    return null;
-  };
-  const findByProp = (node, key, val) => {
-    if (!node || typeof node !== 'object') return null;
-    if (node.props?.[key] === val) return node;
-    for (const child of node.children || []) {
-      const hit = findByProp(child, key, val);
       if (hit) return hit;
     }
     return null;
@@ -671,57 +674,25 @@ test('v0.2.7: client.js renders dual-mode plugin policy card in BOTH remote and 
     return { render, flush };
   }
 
-  // 1. Remote mode: fetches /api/tiana-remote/plugin-access, toggles to deny_all + whitelist, saves, shows reload banner
-  const remotePosts = [];
-  const remoteMount = mountPanel('remote', async (url, opts) => {
+  // 1. Remote mode: fetches ONLY /api/tiana-remote/public-status and renders NO plugin policy card
+  const remoteFetchedUrls = [];
+  const remoteMount = mountPanel('remote', async (url) => {
+    remoteFetchedUrls.push(url);
     if (url === '/api/tiana-remote/public-status') {
       return new Response(JSON.stringify({ hostName: 'HostDemo', e2eeFingerprint: 'aa:bb' }), { status: 200 });
-    }
-    if (url === '/api/tiana-remote/plugin-access' && (!opts?.method || opts.method === 'GET')) {
-      return new Response(JSON.stringify({
-        ok: true,
-        mode: 'allow_all',
-        blockedWebPlugins: [],
-        allowedWebPlugins: [],
-        installedWebPlugins: ['dshmarket', 'ds-bot'],
-        envOverride: false,
-      }), { status: 200 });
-    }
-    if (url === '/api/tiana-remote/plugin-access' && opts?.method === 'POST') {
-      const body = JSON.parse(opts.body);
-      remotePosts.push(body);
-      return new Response(JSON.stringify({
-        ok: true,
-        ...body,
-        installedWebPlugins: ['dshmarket', 'ds-bot'],
-        envOverride: false,
-      }), { status: 200 });
     }
     return new Response('{}', { status: 404 });
   });
 
   remoteMount.render();
   await remoteMount.flush();
-  let rTree = remoteMount.render();
-  assert.ok(findById(rTree, 'dshr-plugin-access-card'), 'remote view must render plugin access card');
-  assert.equal(findById(rTree, 'dshr-plugin-mode-allow-all').props['aria-selected'], 'true');
+  const rTree = remoteMount.render();
+  assert.deepEqual(remoteFetchedUrls, ['/api/tiana-remote/public-status']);
+  assert.equal(findById(rTree, 'dshr-plugin-access-card'), null, 'remote view must NOT render plugin access card');
+  assert.ok(findById(rTree, 'dshr-remote-clear-cache'), 'remote view must still render cache refresh button');
+  assert.ok(findById(rTree, 'dshr-remote-lock-forget'), 'remote view must still render lock & forget button');
 
-  findById(rTree, 'dshr-plugin-mode-deny-all').props.onClick();
-  rTree = remoteMount.render();
-  assert.equal(findById(rTree, 'dshr-plugin-mode-deny-all').props['aria-selected'], 'true');
-  findByProp(rTree, 'data-plugin-pkg', 'dshmarket').props.onChange({ target: { checked: true } });
-  rTree = remoteMount.render();
-
-  const formNode = findById(rTree, 'dshr-plugin-access-card').children[0];
-  await formNode.props.onSubmit({ preventDefault() {} });
-  rTree = remoteMount.render();
-  assert.equal(remotePosts.length, 1);
-  assert.equal(remotePosts[0].mode, 'deny_all');
-  assert.deepEqual(remotePosts[0].allowedWebPlugins, ['dshmarket']);
-  assert.ok(findById(rTree, 'dshr-remote-reload-banner'), 'remote save must show reload workbench banner');
-  assert.ok(findById(rTree, 'dshr-remote-reload-workbench'), 'remote save must offer reload button');
-
-  // 2. Local mode: renders bridgeConflict banner AND plugin access card
+  // 2. Local mode: renders bridgeConflict banner and renders NO plugin policy card
   const localMount = mountPanel('local', async () => new Response(JSON.stringify({
     ok: true,
     configured: true,
@@ -732,14 +703,6 @@ test('v0.2.7: client.js renders dual-mode plugin policy card in BOTH remote and 
     bridge: { relayConnected: false, hostConflict: true, sessions: [] },
     bridgeConflict: { ownerPid: 2495419, ownerOrigin: 'https://workstation.example.test:3080' },
     network: { p2pEnabled: true, stunUrls: [] },
-    pluginAccess: {
-      ok: true,
-      mode: 'allow_all',
-      blockedWebPlugins: ['ds-bot'],
-      allowedWebPlugins: [],
-      installedWebPlugins: ['dshmarket', 'ds-bot'],
-      envOverride: false,
-    },
   }), { status: 200 }));
 
   localMount.render();
@@ -748,7 +711,5 @@ test('v0.2.7: client.js renders dual-mode plugin policy card in BOTH remote and 
   const conflictBanner = findById(lTree, 'dshr-bridge-conflict-banner');
   assert.ok(conflictBanner, 'local view must render bridgeConflict alert banner');
   assert.ok(collectText(conflictBanner).includes('2495419'));
-  assert.ok(findById(lTree, 'dshr-plugin-access-card'), 'local view must render plugin access card');
-  assert.equal(findByProp(lTree, 'data-plugin-pkg', 'ds-bot').props.checked, true, 'blacklisted plugin checkbox must be checked in allow_all mode');
-  assert.equal(findByProp(lTree, 'data-plugin-pkg', 'dshmarket').props.checked, false, 'allowed plugin checkbox must be unchecked in allow_all mode');
+  assert.equal(findById(lTree, 'dshr-plugin-access-card'), null, 'local view must NOT render plugin access card');
 });

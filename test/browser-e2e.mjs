@@ -226,7 +226,6 @@ saveRemoteState({
   function: { id: 'fn-e2e-relay', name: 'DSH Remote Relay', url: `http://127.0.0.1:${relayPort}`, token: 'tok-e2e', expiresAt: tokenExpiresAt },
   web: { id: target.webId, name: 'DSH Remote', endpoint: `https://${target.webId}.example.test${appBase}` },
   network: { p2pEnabled: false, stunUrls: ['stun:stun.cloudflare.com:3478'] },
-  security: { allowedWebPlugins: [] },
 }, statePath);
 
 let videoAbortedCount = 0;
@@ -661,7 +660,7 @@ async function startHostBridge() {
     ownerTenantId: target.ownerTenantId,
     webId: target.webId,
     p2p: 'off',
-    frontendOptions: { frontend: fakeFrontendDir, allowlist: [] },
+    frontendOptions: { frontend: fakeFrontendDir },
     collectIndexInjections: async () => [
       { kind: 'global', name: '__DSH_BOOT__', value: { entries: [], batches: [], release: { version: 'e2e' }, rev: 'e2e' } },
     ],

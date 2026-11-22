@@ -1163,10 +1163,6 @@ export async function bindTianaRemoteWeb(options = {}) {
           p2pEnabled: true,
           stunUrls: [...DEFAULT_STUN_URLS],
         },
-        security: latest.security || {
-          allowedWebPlugins: [],
-        },
-        allowedWebPlugins: latest.security?.allowedWebPlugins || latest.allowedWebPlugins || [],
       };
       saveRemoteState(nextState, statePath);
       return nextState;
@@ -1531,10 +1527,6 @@ export async function provisionTianaRemote(options = {}) {
             p2pEnabled: true,
             stunUrls: [...DEFAULT_STUN_URLS],
           },
-          security: migrated.security || {
-            allowedWebPlugins: [],
-          },
-          allowedWebPlugins: migrated.security?.allowedWebPlugins || [],
         };
         saveRemoteState(finalState, statePath);
         return finalState;

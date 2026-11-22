@@ -23,7 +23,7 @@ import {
   resolveTianaBinary,
   runConnect,
 } from '../src/connect.js';
-import { FrontendAssets, selectAllowedWebPlugins } from '../src/frontend-assets.js';
+import { FrontendAssets } from '../src/frontend-assets.js';
 import { classifyHttpRoute, HostBridge } from '../src/host-bridge.js';
 import {
   decodeClientFrame,
@@ -175,11 +175,8 @@ test('state.js v1->v2 lossless migration, file locking, and dshk1_ pairing key r
     assert.equal(v2.e2ee.secret, rawSecret);
     assert.deepEqual(v2.tiana, v1.tiana);
     assert.deepEqual(v2.network, { p2pEnabled: true, stunUrls: ['stun:stun.cloudflare.com:3478'] });
-    assert.deepEqual(v2.security, {
-      pluginAccessMode: 'allow_all',
-      blockedWebPlugins: [],
-      allowedWebPlugins: [],
-    });
+    assert.equal('security' in v2, false);
+    assert.equal('allowedWebPlugins' in v2, false);
 
     // withStateLock serializes concurrent writers cleanly
     saveRemoteState({ count: 0 }, filePath);
@@ -283,7 +280,6 @@ test('HostBridge blocks /api/tiana-remote/admin/* with 403, local triple-guard a
     function: { id: 'fn-1', url: 'https://relay.example.test', token: 'tok-1', expiresAt: Math.floor(Date.now() / 1000) + 864000 },
     web: { id: 'web000000115', name: 'DSH Remote', endpoint: 'https://web000000115.example.test/web/web000000115/' },
     network: { p2pEnabled: false, stunUrls: ['stun:stun.cloudflare.com:3478'] },
-    security: { allowedWebPlugins: [] },
   }, statePath);
 
   // Classify checks
@@ -683,40 +679,81 @@ test('Round 2 #1: real HTTP webServer.register enforces loopback socket, loopbac
   }
 });
 
-test('Round 2 #6: empty allowedWebPlugins [] blocks third-party plugins while keeping @deepseek-ai/dsh-* core + dsh-remote; "*" allows all', () => {
-  const corePackages = [
-    '@deepseek-ai/dsh-client-modules',
-    '@deepseek-ai/dsh-client-ui-layout',
-    '@deepseek-ai/dsh-api-remotes',
-    '@deepseek-ai/dsh-typert-registry',
-    '@deepseek-ai/dsh-api-gateway',
-    '@deepseek-ai/dsh-api-session-controller',
-    '@deepseek-ai/dsh-api-workspace-controller',
-    '@deepseek-ai/dsh-api-remote-access',
-    '@deepseek-ai/dsh-api-job-controller',
-    '@deepseek-ai/dsh-api-terminal-controller',
-    '@deepseek-ai/dsh-api-workspace-files',
-    '@deepseek-ai/dsh-cordis-client-runner',
-    '@deepseek-ai/dsh-message-quotes',
-    '@deepseek-ai/dsh-session-log-export',
-  ];
-  const modules = new Map([
-    ...corePackages.map((id) => [id, {}]),
-    ['@tianacloud/dsh-remote', {}],
-    ['@acme/custom-plugin', {}],
-    ['community-plugin', {}],
-  ]);
+test('FrontendAssets.prepare() unconditionally allows all active DSH plugins and ignores DSH_REMOTE_WEB_PLUGINS', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-plugins-passthrough-'));
+  const prevEnv = process.env.DSH_REMOTE_WEB_PLUGINS;
+  try {
+    process.env.DSH_REMOTE_WEB_PLUGINS = 'only-nonexistent-plugin';
+    const frontendDir = join(dir, 'dsh-web-frontend');
+    mkdirSync(join(frontendDir, 'dist', 'assets'), { recursive: true });
+    writeFileSync(
+      join(frontendDir, 'dist', 'index.html'),
+      '<!doctype html><link rel="stylesheet" href="./assets/app.css"><script type="module" src="./assets/index.js"></script>',
+    );
+    writeFileSync(join(frontendDir, 'dist', 'assets', 'app.css'), 'body{margin:0}');
+    writeFileSync(
+      join(frontendDir, 'dist', 'assets', 'index.js'),
+      'const __e = new Function("ctx","expr",`return eval(expr)`); const __p=function(load,deps){let p=Promise.resolve();if(deps){new Event("vite:preloadError")}return p.then(()=>{return load().catch(err)})}; void __e; void __p;',
+    );
 
-  const emptySel = [...selectAllowedWebPlugins(modules, [])].sort();
-  assert.deepEqual(emptySel, [...corePackages, '@tianacloud/dsh-remote'].sort());
-  assert.equal(emptySel.includes('@acme/custom-plugin'), false);
-  assert.equal(emptySel.includes('community-plugin'), false);
+    const makePluginPkg = (name) => {
+      const pkgDir = join(dir, 'pkgs', name.replace('/', '__'));
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name, exports: { './client': './client.js' } }));
+      const clientPath = join(pkgDir, 'client.js');
+      writeFileSync(clientPath, `window.__ModuleLoader__.load({id:${JSON.stringify(name)},factory(){return {};}});`);
+      return clientPath;
+    };
 
-  const explicitSel = [...selectAllowedWebPlugins(modules, ['@acme/custom-plugin'])].sort();
-  assert.deepEqual(explicitSel, [...corePackages, '@tianacloud/dsh-remote', '@acme/custom-plugin'].sort());
+    const clientPaths = new Map([
+      ['@deepseek-ai/dsh-client-modules', makePluginPkg('@deepseek-ai/dsh-client-modules')],
+      ['@tianacloud/dsh-remote', makePluginPkg('@tianacloud/dsh-remote')],
+      ['@acme/custom-plugin', makePluginPkg('@acme/custom-plugin')],
+      ['community-plugin', makePluginPkg('community-plugin')],
+    ]);
 
-  const starSel = [...selectAllowedWebPlugins(modules, ['*'])].sort();
-  assert.deepEqual(starSel, [...modules.keys()].sort());
+    const assets = new FrontendAssets({
+      frontend: frontendDir,
+      activeClientPath: (id) => clientPaths.get(id),
+    });
+    const prepared = await assets.prepare([{
+      kind: 'global',
+      name: '__DSH_BOOT__',
+      value: {
+        entries: [
+          {
+            id: '@deepseek-ai/dsh-client-modules',
+            url: 'plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=r1',
+            rev: 'r1',
+            inject: ['@tianacloud/dsh-remote', '@acme/custom-plugin', 'community-plugin'],
+          },
+          { id: '@tianacloud/dsh-remote', url: 'plugins/??@tianacloud/dsh-remote/client.js&rev=r2', rev: 'r2' },
+          { id: '@acme/custom-plugin', url: 'plugins/??@acme/custom-plugin/client.js&rev=r3', rev: 'r3' },
+          { id: 'community-plugin', url: 'plugins/??community-plugin/client.js&rev=r4', rev: 'r4', external: ['@acme/custom-plugin', 'react'] },
+        ],
+        batches: [],
+      },
+    }]);
+
+    assert.deepEqual(
+      prepared.manifest.boot.entries.map((e) => e.id),
+      ['@deepseek-ai/dsh-client-modules', '@tianacloud/dsh-remote', '@acme/custom-plugin', 'community-plugin'],
+    );
+    assert.deepEqual(
+      prepared.manifest.boot.entries[0].inject,
+      ['@tianacloud/dsh-remote', '@acme/custom-plugin', 'community-plugin'],
+    );
+    assert.deepEqual(
+      prepared.manifest.boot.entries[3].external,
+      ['@acme/custom-plugin', 'react'],
+    );
+    assert.ok(prepared.resources.has('plugin:@acme/custom-plugin/client.js'));
+    assert.ok(prepared.resources.has('plugin:community-plugin/client.js'));
+  } finally {
+    if (prevEnv === undefined) delete process.env.DSH_REMOTE_WEB_PLUGINS;
+    else process.env.DSH_REMOTE_WEB_PLUGINS = prevEnv;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('Round 2 #7 & #8: persistent state lock never steals live PID, CLI --json redacts key, and connect toolchain/liveness checks', async () => {
@@ -982,8 +1019,8 @@ test('Round 2 #14: client.js QR encoder produces standards-compliant ISO/IEC 180
   }
 });
 
-test('FrontendAssets.prepare() with allowlist: [] blocks third-party inject and rejects unallowlisted third-party external', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-allowlist-e2e-'));
+test('FrontendAssets.prepare() passes through all active third-party plugins while enforcing active-module and package-name checks', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-plugins-e2e-'));
   try {
     const frontendDir = join(dir, 'dsh-web-frontend');
     mkdirSync(join(frontendDir, 'dist', 'assets'), { recursive: true });
@@ -1013,7 +1050,13 @@ test('FrontendAssets.prepare() with allowlist: [] blocks third-party inject and 
       ['fixture-selected-plugin', makePluginPkg('fixture-selected-plugin')],
     ]);
 
-    const bootRows = [{
+    const assets = new FrontendAssets({
+      frontend: frontendDir,
+      activeClientPath: (id) => clientPaths.get(id),
+    });
+
+    // All active plugins (including third-party with cross-plugin external deps) pass through intact
+    const prepared = await assets.prepare([{
       kind: 'global',
       name: '__DSH_BOOT__',
       value: {
@@ -1023,74 +1066,53 @@ test('FrontendAssets.prepare() with allowlist: [] blocks third-party inject and 
             url: 'plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=r1',
             rev: 'r1',
             inject: ['@tianacloud/dsh-remote', 'fixture-third-party'],
+            external: ['react', '@tianacloud/dsh-remote', 'fixture-third-party'],
           },
-          {
-            id: '@tianacloud/dsh-remote',
-            url: 'plugins/??@tianacloud/dsh-remote/client.js&rev=r2',
-            rev: 'r2',
-          },
-          {
-            id: 'fixture-third-party',
-            url: 'plugins/??fixture-third-party/client.js&rev=r3',
-            rev: 'r3',
-          },
+          { id: '@tianacloud/dsh-remote', url: 'plugins/??@tianacloud/dsh-remote/client.js&rev=r2', rev: 'r2' },
+          { id: 'fixture-selected-plugin', url: 'plugins/??fixture-selected-plugin/client.js&rev=r3', rev: 'r3', external: ['fixture-third-party'] },
+          { id: 'fixture-third-party', url: 'plugins/??fixture-third-party/client.js&rev=r4', rev: 'r4' },
         ],
         batches: [],
       },
-    }];
-
-    const assets = new FrontendAssets({
-      frontend: frontendDir,
-      allowlist: [],
-      activeClientPath: (id) => clientPaths.get(id),
-    });
-    const prepared = await assets.prepare(bootRows);
+    }]);
     assert.deepEqual(
       prepared.manifest.boot.entries.map((e) => e.id),
-      ['@deepseek-ai/dsh-client-modules', '@tianacloud/dsh-remote'],
-      'allowlist: [] must block fixture-third-party even when listed in bootstrap inject',
+      ['@deepseek-ai/dsh-client-modules', '@tianacloud/dsh-remote', 'fixture-selected-plugin', 'fixture-third-party'],
     );
     const bootstrapRow = prepared.manifest.boot.entries.find((e) => e.id === '@deepseek-ai/dsh-client-modules');
-    assert.deepEqual(bootstrapRow.inject, ['@tianacloud/dsh-remote']);
+    assert.deepEqual(bootstrapRow.inject, ['@tianacloud/dsh-remote', 'fixture-third-party']);
+    assert.deepEqual(bootstrapRow.external, ['react', '@tianacloud/dsh-remote', 'fixture-third-party']);
 
-    // Bootstrap/builtin module referencing unallowlisted third-party in `external` must succeed and strip it
-    const emptyAllowlistExternal = structuredClone(bootRows);
-    emptyAllowlistExternal[0].value.entries[0].external = ['react', '@tianacloud/dsh-remote', 'fixture-third-party'];
-    const preparedExt = await assets.prepare(emptyAllowlistExternal);
-    assert.deepEqual(
-      preparedExt.manifest.boot.entries.map((e) => e.id),
-      ['@deepseek-ai/dsh-client-modules', '@tianacloud/dsh-remote'],
-      'allowlist: [] must keep permitted graph when bootstrap external lists third-party plugins',
-    );
-    const bootstrapExtRow = preparedExt.manifest.boot.entries.find((e) => e.id === '@deepseek-ai/dsh-client-modules');
-    assert.deepEqual(bootstrapExtRow.external, ['react', '@tianacloud/dsh-remote']);
-
-    const onlyThirdPartyExternal = structuredClone(bootRows);
-    onlyThirdPartyExternal[0].value.entries[0].external = ['fixture-third-party'];
-    const preparedOnlyThird = await assets.prepare(onlyThirdPartyExternal);
-    const bootstrapOnlyThird = preparedOnlyThird.manifest.boot.entries.find((e) => e.id === '@deepseek-ai/dsh-client-modules');
-    assert.deepEqual(bootstrapOnlyThird.external, []);
-
-    // Hard external dependency on a non-allowlisted third-party module from a selected third-party plugin must throw
-    const extAssets = new FrontendAssets({
-      frontend: frontendDir,
-      allowlist: ['fixture-selected-plugin'],
-      activeClientPath: (id) => clientPaths.get(id),
-    });
+    // Core security validation: non-active external dependency still throws
     await assert.rejects(
-      () => extAssets.prepare([{
+      () => assets.prepare([{
         kind: 'global',
         name: '__DSH_BOOT__',
         value: {
           entries: [
             { id: '@deepseek-ai/dsh-client-modules', url: 'u1', rev: 'r1' },
-            { id: 'fixture-selected-plugin', url: 'u2', rev: 'r2', external: ['fixture-third-party'] },
-            { id: 'fixture-third-party', url: 'u3', rev: 'r3' },
+            { id: 'fixture-selected-plugin', url: 'u2', rev: 'r2', external: ['missing-module'] },
           ],
           batches: [],
         },
       }]),
-      /Required third-party DSH module is not allowlisted: fixture-third-party/u,
+      /Required DSH module is not active: missing-module/u,
+    );
+
+    // Core security validation: invalid package ID still throws
+    await assert.rejects(
+      () => assets.prepare([{
+        kind: 'global',
+        name: '__DSH_BOOT__',
+        value: {
+          entries: [
+            { id: '@deepseek-ai/dsh-client-modules', url: 'u1', rev: 'r1' },
+            { id: '../escape-pkg', url: 'u2', rev: 'r2' },
+          ],
+          batches: [],
+        },
+      }]),
+      /Invalid DSH boot module/u,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1982,39 +2004,24 @@ test('v0.2.3 P0 regressions: dsh cold-start never passes positional "web" with -
   assert.deepEqual(spawnedCalls[0].args, ['--profile', 'web', '--port', '4123', '--no-open']);
   assert.equal(spawnedCalls[0].args.filter((a) => a === 'web').length, 1, 'profile "web" must appear only once as --profile value');
 
-  // 2. P0 Bug #2: host-main availableWebPlugins treats @deepseek-ai/dsh-* as built-in core, listing only third-party plugins
+  // 2. getAdminOverview omits removed plugin-policy fields
   const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-v023-plugins-'));
   try {
     const statePath = join(dir, 'state.json');
     const runtimePath = join(dir, 'runtime.json');
-    const mockWebServer = {
-      async collectIndexInjections() {
-        return [{
-          kind: 'global',
-          name: '__DSH_BOOT__',
-          value: {
-            entries: [
-              { id: '@deepseek-ai/dsh-client-modules' },
-              { id: '@deepseek-ai/dsh-api-remotes' },
-              { id: '@deepseek-ai/dsh-typert-registry' },
-              { id: '@deepseek-ai/dsh-api-gateway' },
-              { id: '@tianacloud/dsh-remote' },
-              { id: '@acme/custom-plugin' },
-              { id: 'community-plugin' },
-            ],
-          },
-        }];
-      },
-    };
     const controller = createHostController({
       statePath,
       runtimePath,
       log: () => {},
-      getWebServer: () => mockWebServer,
+      getWebServer: () => ({ getOrigin: () => 'http://127.0.0.1:3080' }),
       getConnection: () => ({ browserPeer: {} }),
     });
     const overview = await controller.getAdminOverview();
-    assert.deepEqual(overview.installedWebPlugins.sort(), ['@acme/custom-plugin', 'community-plugin']);
+    assert.equal('pluginAccess' in overview, false);
+    assert.equal('allowedWebPlugins' in overview, false);
+    assert.equal('installedWebPlugins' in overview, false);
+    assert.equal('security' in overview, false);
+    assert.equal('allowedWebPlugins' in overview.envOverrides, false);
     controller.dispose();
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -2428,8 +2435,6 @@ test('v0.2.4: client.js renders explicit error card on admin 403 instead of onbo
       e2ee: { fingerprint: '1122:3344:5566' },
       bridge: { relayConnected: true, sessions: [] },
       network: { p2pEnabled: true, stunUrls: ['stun:stun.cloudflare.com:3478'] },
-      allowedWebPlugins: [],
-      installedWebPlugins: [],
     }),
     { status: 200, headers: { 'content-type': 'application/json' } },
   );

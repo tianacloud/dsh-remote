@@ -515,7 +515,6 @@ test('local sidebar admin API & client.js render conflict/revoked banners, recon
       function: { id: 'fn-1', name: 'fn', url: 'https://fn.example.test', token: 'tok', expiresAt: Math.floor(Date.now() / 1000) + 30 * 86400 },
       e2ee: { secret: generateE2eeSecret(), fingerprint: 'aa:bb:cc', algorithm: 'AES-256-GCM' },
       network: { p2pEnabled: true, stunUrls: [] },
-      security: { pluginAccessMode: 'allow_all', blockedWebPlugins: [], allowedWebPlugins: [] },
     }, statePath);
 
     let startCount = 0;

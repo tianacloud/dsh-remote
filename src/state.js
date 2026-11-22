@@ -14,9 +14,36 @@ import {
 
 export const STATE_CONFIG_VERSION = 2;
 export const DEFAULT_STUN_URLS = ['stun:stun.cloudflare.com:3478'];
-export const PLUGIN_ACCESS_MODE_ALLOW_ALL = 'allow_all';
-export const PLUGIN_ACCESS_MODE_DENY_ALL = 'deny_all';
-export const DEFAULT_PLUGIN_ACCESS_MODE = PLUGIN_ACCESS_MODE_ALLOW_ALL;
+
+const DEPRECATED_PLUGIN_STATE_KEYS = new Set([
+  'pluginPolicy',
+  'pluginAccessMode',
+  'allowedWebPlugins',
+  'blockedWebPlugins',
+  'pluginAccess',
+]);
+
+function stripDeprecatedPluginFields(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (DEPRECATED_PLUGIN_STATE_KEYS.has(key)) continue;
+    if (key === 'security' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const cleanSecurity = {};
+      for (const [sk, sv] of Object.entries(value)) {
+        if (!DEPRECATED_PLUGIN_STATE_KEYS.has(sk)) {
+          cleanSecurity[sk] = sv;
+        }
+      }
+      if (Object.keys(cleanSecurity).length > 0) {
+        out.security = cleanSecurity;
+      }
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
 
 export { formatPairingKey, normalizePairingKey };
 
@@ -133,7 +160,8 @@ export function removeRemoteState(filePath = defaultStatePath()) {
 /**
  * Lossless v1 -> v2 migration / normalization.
  * Preserves existing hostId, hostSigningKeyPair, e2ee/e2eeKeySeed, tiana/owner/function/web fields,
- * and fills v2 network & security defaults without discarding unknown fields.
+ * fills v2 network defaults, and silently strips deprecated plugin-filter fields so legacy state files
+ * continue working seamlessly without writing deprecated keys back on save.
  */
 export function migrateRemoteState(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -141,25 +169,10 @@ export function migrateRemoteState(raw) {
     ? raw.network.stunUrls.map((u) => String(u).trim()).filter(Boolean)
     : [...DEFAULT_STUN_URLS];
   const p2pEnabled = raw.network?.p2pEnabled !== undefined ? Boolean(raw.network.p2pEnabled) : true;
-  const rawMode = raw.security?.pluginAccessMode ?? raw.pluginAccessMode;
-  const pluginAccessMode = rawMode === PLUGIN_ACCESS_MODE_DENY_ALL
-    ? PLUGIN_ACCESS_MODE_DENY_ALL
-    : DEFAULT_PLUGIN_ACCESS_MODE;
-  const rawBlocked = Array.isArray(raw.security?.blockedWebPlugins)
-    ? raw.security.blockedWebPlugins
-    : Array.isArray(raw.blockedWebPlugins)
-      ? raw.blockedWebPlugins
-      : [];
-  const blockedWebPlugins = [...new Set(rawBlocked.map((item) => String(item).trim()).filter(Boolean))];
-  const rawAllowed = Array.isArray(raw.security?.allowedWebPlugins)
-    ? raw.security.allowedWebPlugins
-    : Array.isArray(raw.allowedWebPlugins)
-      ? raw.allowedWebPlugins
-      : [];
-  const allowedWebPlugins = [...new Set(rawAllowed.map((item) => String(item).trim()).filter(Boolean))];
+  const base = stripDeprecatedPluginFields(raw);
 
   const next = {
-    ...raw,
+    ...base,
     version: STATE_CONFIG_VERSION,
     configVersion: STATE_CONFIG_VERSION,
     enabled: raw.enabled !== undefined ? Boolean(raw.enabled) : true,
@@ -167,13 +180,6 @@ export function migrateRemoteState(raw) {
       p2pEnabled,
       stunUrls,
     },
-    security: {
-      ...(raw.security && typeof raw.security === 'object' ? raw.security : {}),
-      pluginAccessMode,
-      blockedWebPlugins,
-      allowedWebPlugins,
-    },
-    allowedWebPlugins,
   };
 
   if (raw.hostId && !next.host) {
