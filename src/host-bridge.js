@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import diagnosticsChannel from 'node:diagnostics_channel';
 import { RTCPeerConnection } from 'werift';
 import { MultipathSession, createPath, LEASE_MS, relayPacer, RELAY_GRACE_MS } from '../web-src/multipath.js';
 import { PeerPath, localAddress, normalizeP2pEnabled, normalizeStun } from '../web-src/peer-path.js';
@@ -257,11 +259,21 @@ export class HostBridge {
     this.reconnectAttempts = 0;
     this.reconnectTimer = null;
     this.stableTimer = null;
+    this.reconnectBaseMs = options.reconnectBaseMs ?? 1_000;
+    this.reconnectMaxMs = options.reconnectMaxMs ?? 30_000;
     this.stableConnectionMs = options.stableConnectionMs ?? 15_000;
     this.conflictMinBackoffMs = options.conflictMinBackoffMs ?? 5_000;
+    this.instanceId = (typeof options.instanceId === 'string' && /^[a-zA-Z0-9_-]{1,64}$/u.test(options.instanceId))
+      ? options.instanceId
+      : randomUUID();
     this.hostConflict = false;
+    this.credentialsRevoked = false;
+    this.terminalState = null;
+    this.terminalReason = '';
+    this.lastHttpStatus = null;
     this.lastCloseCode = null;
     this.lastCloseReason = '';
+    this.fetchFn = options.fetchFn ?? fetch;
     this.connectedPromise = null;
     this.browserCookie = null;
     this.browserCookieGeneration = 0;
@@ -332,8 +344,13 @@ export class HostBridge {
       running: !this.stopped,
       relayConnected: this.registered,
       hostConflict: this.hostConflict,
+      credentialsRevoked: this.credentialsRevoked,
+      terminalState: this.terminalState,
+      terminalReason: this.terminalReason,
+      lastHttpStatus: this.lastHttpStatus,
       lastCloseCode: this.lastCloseCode,
       lastCloseReason: this.lastCloseReason,
+      instanceId: this.instanceId,
       hostId: this.hostId,
       hostName: this.hostName,
       p2pEnabled: this.p2pEnabled,
@@ -402,12 +419,52 @@ export class HostBridge {
     if (url.username || url.password) throw new Error('Invalid relay origin');
     url.searchParams.set('host_id', this.hostId);
     url.searchParams.set('name', this.hostName);
+    url.searchParams.set('instance_id', this.instanceId);
     return url.href;
   }
 
   start() {
     this.stopped = false;
+    this.hostConflict = false;
+    this.terminalState = null;
+    this.terminalReason = '';
+    this.credentialsRevoked = false;
+    this.lastHttpStatus = null;
+    this.lastCloseCode = null;
+    this.lastCloseReason = '';
     return this.connectOnce();
+  }
+
+  enterTerminalState(state, { httpStatus = null, code = 0, reason = '' } = {}) {
+    this.stopped = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.stableTimer) {
+      clearTimeout(this.stableTimer);
+      this.stableTimer = null;
+    }
+    this.registered = false;
+    this.terminalState = state;
+    this.lastHttpStatus = httpStatus;
+    this.lastCloseCode = code || null;
+    this.lastCloseReason = reason || '';
+    if (state === 'conflict_active_host') {
+      this.hostConflict = true;
+      this.credentialsRevoked = false;
+      this.terminalReason = reason || 'host_already_connected';
+      this.log(
+        `[dsh-remote] Stopped auto-reconnect (conflict_active_host): 已有另一个宿主实例在线 ("${this.hostId}")，请先停止旧实例后再重试/重新启用。Another host instance is already connected to this Relay; stop it before retrying.`,
+      );
+    } else if (state === 'credentials_revoked') {
+      this.hostConflict = false;
+      this.credentialsRevoked = true;
+      this.terminalReason = reason || 'forbidden';
+      this.log(
+        `[dsh-remote] Stopped auto-reconnect (credentials_revoked): 连接凭据已失效（可能已被其他宿主接管或解绑），请重新绑定。Host credentials rejected (HTTP 403); rebind this host to restore remote access.`,
+      );
+    }
   }
 
   stop() {
@@ -442,8 +499,8 @@ export class HostBridge {
   }
 
   scheduleReconnect({ replaced = false, code = 0, reason = '' } = {}) {
-    if (this.stopped || this.reconnectTimer) return;
-    let delayMs = Math.min(30_000, 1000 * Math.pow(2, Math.min(this.reconnectAttempts, 5)));
+    if (this.stopped || this.terminalState || this.reconnectTimer) return;
+    let delayMs = Math.min(this.reconnectMaxMs, this.reconnectBaseMs * Math.pow(2, Math.min(this.reconnectAttempts, 5)));
     if (replaced) {
       delayMs = Math.max(this.conflictMinBackoffMs, delayMs);
     }
@@ -455,7 +512,7 @@ export class HostBridge {
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      if (!this.stopped) {
+      if (!this.stopped && !this.terminalState) {
         this.connectOnce().catch((err) => {
           this.log(`[dsh-remote] Reconnect attempt failed: ${err.message}`);
         });
@@ -463,9 +520,28 @@ export class HostBridge {
     }, delayMs);
   }
 
+  async probeHandshakeRejectionStatus(httpHref, headers) {
+    try {
+      const resp = await this.fetchFn(httpHref, {
+        method: 'GET',
+        headers,
+        redirect: 'error',
+        signal: AbortSignal.timeout(3_000),
+      });
+      return Number(resp?.status || 0) || null;
+    } catch {
+      return null;
+    }
+  }
+
   connectOnce() {
     if (this.stopped) return Promise.resolve();
     const wsUrl = this.buildRelayHostWsUrl();
+    const httpUrl = new URL(wsUrl);
+    httpUrl.protocol = httpUrl.protocol === 'wss:' ? 'https:' : 'http:';
+    const expectedOrigin = httpUrl.origin;
+    const expectedPath = `${httpUrl.pathname}${httpUrl.search}`;
+
     const headers = { 'Dsh-Host-Registration': this.registrationKey };
     if (this.relayToken) {
       headers.Authorization = `Bearer ${this.relayToken}`;
@@ -473,12 +549,49 @@ export class HostBridge {
 
     return new Promise((resolve, reject) => {
       let settled = false;
-      const ws = new WebSocket(wsUrl, { headers });
+      let opened = false;
+      let handshakeStatus = null;
+      let handshakeNetworkError = false;
+      let diagnosticsCleaned = false;
+
+      const onUndiciHeaders = (msg) => {
+        if (msg?.request?.origin === expectedOrigin && msg?.request?.path === expectedPath) {
+          const st = Number(msg?.response?.statusCode || 0);
+          if (st > 0) handshakeStatus = st;
+        }
+      };
+      const onUndiciError = (msg) => {
+        if (msg?.request?.origin === expectedOrigin && msg?.request?.path === expectedPath) {
+          handshakeNetworkError = true;
+        }
+      };
+      const cleanupDiagnostics = () => {
+        if (diagnosticsCleaned) return;
+        diagnosticsCleaned = true;
+        try { diagnosticsChannel.unsubscribe('undici:request:headers', onUndiciHeaders); } catch { /* ignore */ }
+        try { diagnosticsChannel.unsubscribe('undici:request:error', onUndiciError); } catch { /* ignore */ }
+      };
+      diagnosticsChannel.subscribe('undici:request:headers', onUndiciHeaders);
+      diagnosticsChannel.subscribe('undici:request:error', onUndiciError);
+
+      let ws;
+      try {
+        ws = new WebSocket(wsUrl, { headers });
+      } catch (err) {
+        cleanupDiagnostics();
+        reject(err);
+        return;
+      }
       const registrationTimeout = setTimeout(() => ws.close(), 10_000);
       this.registered = false;
       ws.binaryType = 'arraybuffer';
       this.ws = ws;
       this.paceRelay = relayPacer();
+
+      ws.addEventListener('open', () => {
+        opened = true;
+        cleanupDiagnostics();
+      });
 
       ws.addEventListener('message', (event) => {
         if (this.ws !== ws || !(event.data instanceof ArrayBuffer)) return;
@@ -498,6 +611,10 @@ export class HostBridge {
           }
           clearTimeout(registrationTimeout);
           this.registered = true;
+          this.terminalState = null;
+          this.terminalReason = '';
+          this.credentialsRevoked = false;
+          this.lastHttpStatus = 101;
           clearTimeout(this.stableTimer);
           this.stableTimer = setTimeout(() => {
             if (this.ws === ws && this.registered) {
@@ -517,23 +634,69 @@ export class HostBridge {
         });
       });
 
-      ws.addEventListener('close', (event) => {
+      ws.addEventListener('close', async (event) => {
         clearTimeout(registrationTimeout);
-        if (this.ws === ws) {
+        cleanupDiagnostics();
+        const isCurrent = this.ws === ws;
+        const code = Number(event?.code || 0);
+        const reason = typeof event?.reason === 'string' ? event.reason : '';
+
+        if (isCurrent) {
           clearTimeout(this.stableTimer);
           this.stableTimer = null;
           this.registered = false;
           this.ws = null;
-          const code = Number(event?.code || 0);
-          const reason = typeof event?.reason === 'string' ? event.reason : '';
           this.lastCloseCode = code || null;
           this.lastCloseReason = reason;
-          const replaced = /replaced by newer host connection/iu.test(reason);
-          if (replaced) {
-            this.hostConflict = true;
-          }
           for (const [id] of this.relayLegs) this.detachRelay(id);
+
+          let effectiveStatus = handshakeStatus;
+          if (!opened && effectiveStatus === null && !handshakeNetworkError && code === 1006 && !this.stopped) {
+            effectiveStatus = await this.probeHandshakeRejectionStatus(httpUrl.href, headers);
+          }
+
           if (!this.stopped) {
+            if (effectiveStatus === 409 || code === 4009 || /host_already_connected/iu.test(reason)) {
+              this.enterTerminalState('conflict_active_host', {
+                httpStatus: effectiveStatus,
+                code,
+                reason: reason || 'host_already_connected',
+              });
+              if (!settled) {
+                settled = true;
+                const err = new Error(`Relay rejected host "${this.hostId}": another host instance is already connected (host_already_connected)`);
+                err.code = 'HOST_ALREADY_CONNECTED';
+                err.terminalState = 'conflict_active_host';
+                err.httpStatus = effectiveStatus;
+                err.closeCode = code || null;
+                reject(err);
+              }
+              return;
+            }
+
+            if (effectiveStatus === 403) {
+              this.enterTerminalState('credentials_revoked', {
+                httpStatus: 403,
+                code,
+                reason: reason || 'forbidden',
+              });
+              if (!settled) {
+                settled = true;
+                const err = new Error(`Relay rejected host "${this.hostId}" credentials (HTTP 403 forbidden)`);
+                err.code = 'CREDENTIALS_REVOKED';
+                err.terminalState = 'credentials_revoked';
+                err.httpStatus = 403;
+                err.closeCode = code || null;
+                reject(err);
+              }
+              return;
+            }
+
+            const replaced = /replaced by newer host connection/iu.test(reason);
+            if (replaced) {
+              this.hostConflict = true;
+            }
+            this.lastHttpStatus = effectiveStatus;
             this.scheduleReconnect({ replaced, code, reason });
           }
         }
@@ -544,7 +707,7 @@ export class HostBridge {
       });
 
       ws.addEventListener('error', () => {
-        // close event will trigger reconnect / rejection
+        // close event will trigger terminal classification or reconnect / rejection
       });
     });
   }

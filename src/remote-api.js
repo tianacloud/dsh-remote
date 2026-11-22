@@ -456,6 +456,11 @@ export function createRemoteApiHandler(controller, connection = null) {
           return jsonResponse(200, { ok: true, ...result });
         }
 
+        if (path === '/api/tiana-remote/admin/reconnect' && method === 'POST') {
+          const result = await controller.reconnectBridge();
+          return jsonResponse(200, { ok: true, ...result });
+        }
+
         if (path === '/api/tiana-remote/admin/provision' && method === 'POST') {
           const body = await readJsonBody(request);
           const started = controller.startProvision(body);
@@ -617,6 +622,7 @@ export function registerRemoteRoutes(connection, controller) {
     { path: '/api/tiana-remote/admin/settings', methods: ['POST'] },
     { path: '/api/tiana-remote/admin/repair', methods: ['POST'] },
     { path: '/api/tiana-remote/admin/token/renew', methods: ['POST'] },
+    { path: '/api/tiana-remote/admin/reconnect', methods: ['POST'] },
     { path: '/api/tiana-remote/admin/provision', methods: ['POST'] },
     { path: '/api/tiana-remote/admin/provision-status', methods: ['GET', 'HEAD'] },
   ];

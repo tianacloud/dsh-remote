@@ -6,7 +6,15 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { promisify } from 'node:util';
 import { copyToClipboard, maskPairingKey } from './clipboard.js';
-import { formatPairingKey, isPidAlive, readRuntimeInfo, resolveDshHome } from './state.js';
+import {
+  detectLocalRunningHost,
+  formatLocalHostConflictError,
+  formatPairingKey,
+  isPidAlive,
+  loadNormalizedRemoteState,
+  readRuntimeInfo,
+  resolveDshHome,
+} from './state.js';
 import { bindTianaRemoteWeb, getTianaStatus, tianaBinary } from './tiana-cli.js';
 
 const execFileAsync = promisify(execFile);
@@ -468,65 +476,115 @@ export async function runConnect(options = {}, deps = {}) {
   const execFn = deps.execFn ?? execQuiet;
   const fetchFn = deps.fetchFn ?? fetch;
 
-  // Step 2: Detect or install DSH
-  let dshInfo = deps.resolveDsh ? await deps.resolveDsh() : await resolveDshBinary(execFn);
-  let installedDsh = false;
-  if (!dshInfo) {
-    dshInfo = deps.installDsh ? await deps.installDsh() : await installDshPackage(execFn, log);
-    installedDsh = true;
-  }
-
-  // Step 3a: Idempotently ensure dsh-tiana + dsh-remote plugins (fail-fast on error!)
-  if (deps.ensurePlugins) {
-    await deps.ensurePlugins(dshInfo.bin, profile);
-  } else {
-    await ensureDshPlugins(dshInfo.bin, { profile, execFn, log });
-  }
-
-  // Step 3b: Ensure `@tianacloud/cli >= 1.0.32` & `@tianacloud/agent-skills` in `$DSH_HOME/skills`
-  const tianaToolchain = deps.ensureTianaToolchain
-    ? await deps.ensureTianaToolchain()
-    : await ensureTianaToolchain({ execFn, log });
-  const tianaBin = tianaToolchain?.bin;
-
-  // Step 4: Ensure Tiana CLI login using verified tiana executable
-  if (deps.ensureLogin) {
-    await deps.ensureLogin(tianaBin);
-  } else {
-    await ensureTianaLoggedIn({ interactive, tianaBin, log });
-  }
-
-  // Step 5: Zero-recompile binding (DSH_REMOTE_POLICY + Token + state.json)
-  const confirmRebind = async (existingPolicy, target) => {
-    if (!interactive) return false;
-    const rl = createInterface({ input: process.stdin, output: process.stderr });
-    try {
-      const answer = await rl.question(
-        `App ${webId} is currently bound to "${existingPolicy.hostName || existingPolicy.hostId}" (${existingPolicy.hostId}). Rebind to "${target.hostName}" (${target.hostId})? [y/N] `,
-      );
-      return /^y(?:es)?$/iu.test(answer.trim());
-    } finally {
-      rl.close();
-    }
-  };
-
-  const bindFn = deps.bindRemoteWeb ?? bindTianaRemoteWeb;
-  const state = await bindFn({
-    webId,
-    spaceId: options.space,
-    hostName: options.hostName,
-    rebind: Boolean(options.rebind),
-    confirmRebind: deps.confirmRebind ?? confirmRebind,
+  // Step 1: Local preflight — inspect bridge-owner.json & runtime.json before mutating cloud/local state
+  const localHost = detectLocalRunningHost({
     statePath: options.statePath,
-    tianaBin,
-    log,
+    runtimePath: options.runtimePath,
+    currentPid: deps.currentPid ?? process.pid,
+    isAlive: deps.isPidAlive ?? isPidAlive,
+    readRuntime: deps.readRuntime,
+    readBridgeOwner: deps.readBridgeOwner,
   });
+  let state = null;
+  let dshInfo = null;
+  let installedDsh = false;
+  let tianaToolchain = null;
+  let reusedExistingHost = false;
+
+  if (localHost.running) {
+    let existingState = null;
+    try {
+      existingState = loadNormalizedRemoteState(options.statePath);
+    } catch {
+      existingState = null;
+    }
+    const canReuseSameConfig = Boolean(
+      !options.forceRebind &&
+      !options.rebind &&
+      !options.hostId &&
+      !options.hostName &&
+      !options.rotateToken &&
+      !options.rotateE2eeKey &&
+      existingState?.web?.id === webId &&
+      existingState?.e2ee?.secret &&
+      existingState?.web?.endpoint &&
+      (!localHost.hostId || localHost.hostId === existingState?.host?.hostId),
+    );
+    if (!canReuseSameConfig && !options.forceRebind) {
+      throw formatLocalHostConflictError(localHost);
+    }
+    if (canReuseSameConfig) {
+      reusedExistingHost = true;
+      state = existingState;
+      log(
+        `[dsh-remote] Reusing already running local DSH host (PID ${localHost.pid}${localHost.origin ? `, ${localHost.origin}` : ''}) for Web app ${webId}.`,
+      );
+    }
+  }
+
+  if (!reusedExistingHost) {
+    // Step 2: Detect or install DSH
+    dshInfo = deps.resolveDsh ? await deps.resolveDsh() : await resolveDshBinary(execFn);
+    if (!dshInfo) {
+      dshInfo = deps.installDsh ? await deps.installDsh() : await installDshPackage(execFn, log);
+      installedDsh = true;
+    }
+
+    // Step 3a: Idempotently ensure dsh-tiana + dsh-remote plugins (fail-fast on error!)
+    if (deps.ensurePlugins) {
+      await deps.ensurePlugins(dshInfo.bin, profile);
+    } else {
+      await ensureDshPlugins(dshInfo.bin, { profile, execFn, log });
+    }
+
+    // Step 3b: Ensure `@tianacloud/cli >= 1.0.32` & `@tianacloud/agent-skills` in `$DSH_HOME/skills`
+    tianaToolchain = deps.ensureTianaToolchain
+      ? await deps.ensureTianaToolchain()
+      : await ensureTianaToolchain({ execFn, log });
+    const tianaBin = tianaToolchain?.bin;
+
+    // Step 4: Ensure Tiana CLI login using verified tiana executable
+    if (deps.ensureLogin) {
+      await deps.ensureLogin(tianaBin);
+    } else {
+      await ensureTianaLoggedIn({ interactive, tianaBin, log });
+    }
+
+    // Step 5: Zero-recompile binding (DSH_REMOTE_POLICY + Token + state.json)
+    const confirmRebind = async (existingPolicy, target) => {
+      if (!interactive) return false;
+      const rl = createInterface({ input: process.stdin, output: process.stderr });
+      try {
+        const answer = await rl.question(
+          `App ${webId} is currently bound to "${existingPolicy.hostName || existingPolicy.hostId}" (${existingPolicy.hostId}). Rebind to "${target.hostName}" (${target.hostId})? [y/N] `,
+        );
+        return /^y(?:es)?$/iu.test(answer.trim());
+      } finally {
+        rl.close();
+      }
+    };
+
+    const bindFn = deps.bindRemoteWeb ?? bindTianaRemoteWeb;
+    state = await bindFn({
+      webId,
+      spaceId: options.space,
+      hostName: options.hostName,
+      rebind: Boolean(options.rebind),
+      forceRebind: Boolean(options.forceRebind),
+      confirmRebind: deps.confirmRebind ?? confirmRebind,
+      statePath: options.statePath,
+      skipLocalPreflight: true,
+      probeRelayHostStatus: deps.probeRelayHostStatus,
+      tianaBin,
+      log,
+    });
+  }
 
   // Step 6: Verify local DSH liveness (PID + real health probe) and start if needed
   let dshStarted = false;
   const runtime = deps.readRuntime ? deps.readRuntime() : readRuntimeInfo();
-  let runtimeAlive = false;
-  if (runtime) {
+  let runtimeAlive = Boolean(reusedExistingHost || localHost.running);
+  if (!runtimeAlive && runtime) {
     const probeOrigins = [...new Set([
       runtime.advertisedOrigin,
       runtime.origin,
@@ -614,6 +672,7 @@ export async function runConnect(options = {}, deps = {}) {
     clipboardTool: clipboardResult.tool || null,
     dshInstalled: installedDsh,
     dshStarted: Boolean(dshStarted || runtimeAlive),
+    ...(reusedExistingHost ? { reusedExistingHost: true } : {}),
     browserOpened,
     ...(!options.json && options.printKey ? { pairingKey } : {}),
   };
@@ -636,7 +695,7 @@ export async function runConnect(options = {}, deps = {}) {
   } else {
     log(`  Pairing Key : ${maskPairingKey(pairingKey)} (clipboard unavailable; run with --print-key or press Enter to reveal)`);
   }
-  if (dshInfo.userLocal || tianaToolchain?.userLocalCli) {
+  if (dshInfo?.userLocal || tianaToolchain?.userLocalCli) {
     log('  PATH tip    : export PATH="$HOME/.local/bin:$PATH"');
   }
   log('============================================================');

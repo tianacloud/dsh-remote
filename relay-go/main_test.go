@@ -1018,3 +1018,330 @@ func TestRelayHostOnlineAtomicEnqueueAndConcurrentPolicyEviction(t *testing.T) {
 		_ = hCli.Close()
 	}
 }
+
+func dialTestWSRawResponse(t *testing.T, rawURL string, headers http.Header) (*http.Response, net.Conn, *bufio.Reader) {
+	t.Helper()
+	addr := strings.TrimPrefix(rawURL, "http://")
+	idx := strings.Index(addr, "/")
+	hostPort := addr[:idx]
+	path := addr[idx:]
+
+	conn, err := net.DialTimeout("tcp", hostPort, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial %s: %v", hostPort, err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	var keyBytes [16]byte
+	_, _ = rand.Read(keyBytes[:])
+	key := base64.StdEncoding.EncodeToString(keyBytes[:])
+
+	var req strings.Builder
+	req.WriteString("GET " + path + " HTTP/1.1\r\n")
+	req.WriteString("Host: " + hostPort + "\r\n")
+	req.WriteString("Connection: Upgrade\r\n")
+	req.WriteString("Upgrade: websocket\r\n")
+	req.WriteString("Sec-WebSocket-Version: 13\r\n")
+	req.WriteString("Sec-WebSocket-Key: " + key + "\r\n")
+	for k, vals := range headers {
+		for _, v := range vals {
+			req.WriteString(k + ": " + v + "\r\n")
+		}
+	}
+	req.WriteString("\r\n")
+	if _, err := io.WriteString(conn, req.String()); err != nil {
+		t.Fatalf("write upgrade: %v", err)
+	}
+
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, &http.Request{Method: "GET"})
+	if err != nil {
+		t.Fatalf("read upgrade response: %v", err)
+	}
+	return resp, conn, br
+}
+
+func TestRelayHostStrictMutexSameInstanceReconnectAndDifferentInstanceRejection(t *testing.T) {
+	hub, hostHdr, clientHdr := fixtureRelay("mac-mutex")
+	srv := httptest.NewServer(newMux(hub))
+	defer srv.Close()
+
+	// 1. Invalid instance_id is rejected with 400
+	respBad, _, _ := dialTestWSRawResponse(t, srv.URL+"/ws/host?host_id=mac-mutex&instance_id=bad!id", hostHdr)
+	_ = respBad.Body.Close()
+	if respBad.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid instance_id, got %d", respBad.StatusCode)
+	}
+
+	// 2. Host A connects with instance_id=inst-A
+	hostAConn, hostABr := dialTestWS(t, srv.URL+"/ws/host?host_id=mac-mutex&name=HostA&instance_id=inst-A", hostHdr)
+	_, regA := readTestServerFrame(t, hostABr)
+	var regAMsg map[string]any
+	if err := json.Unmarshal(regA[9:], &regAMsg); err != nil || regAMsg["type"] != "host_registered" {
+		t.Fatalf("unexpected host A reg: %s %v", regA[9:], err)
+	}
+
+	// 3. Host B with DIFFERENT instance_id=inst-B is rejected with 409 Conflict before upgrade; Host A remains alive!
+	respB, _, _ := dialTestWSRawResponse(t, srv.URL+"/ws/host?host_id=mac-mutex&name=HostB&instance_id=inst-B", hostHdr)
+	var bodyB map[string]any
+	_ = json.NewDecoder(respB.Body).Decode(&bodyB)
+	_ = respB.Body.Close()
+	if respB.StatusCode != http.StatusConflict || bodyB["error"] != "host_already_connected" || bodyB["hostId"] != "mac-mutex" {
+		t.Fatalf("expected 409 host_already_connected for different instance_id, got %d %+v", respB.StatusCode, bodyB)
+	}
+
+	// Verify Host A is still connected and actively forwarding traffic
+	clientConn, clientBr := dialTestWS(t, srv.URL+"/ws/client?host_id=mac-mutex", clientHdr)
+	_, openFrame := readTestServerFrame(t, hostABr)
+	var openMsg map[string]any
+	if err := json.Unmarshal(openFrame[9:], &openMsg); err != nil || openMsg["type"] != "open_session" {
+		t.Fatalf("expected Host A to remain alive and receive open_session, got %s %v", openFrame[9:], err)
+	}
+	readTestServerFrame(t, clientBr) // welcome
+	_ = clientConn.Close()
+	readTestServerFrame(t, hostABr) // close_session
+
+	// 4. Race-window conflict directly in registerHostWithInstance returns hostRegConflict and keeps Host A intact
+	raceSrv, raceCli := net.Pipe()
+	raceWC := &wsConn{
+		maxQueued: maxHostQueuedBytes,
+		netConn:   raceSrv,
+		sendCh:    make(chan wsFrame, 4),
+		closeCh:   make(chan struct{}),
+		lifetime:  time.AfterFunc(time.Minute, func() {}),
+	}
+	defer func() {
+		raceWC.close(1000, "")
+		_ = raceCli.Close()
+	}()
+	pol, epoch, err := hub.syncPolicy()
+	if err != nil {
+		t.Fatalf("syncPolicy: %v", err)
+	}
+	if entry, status := hub.registerHostWithInstance("mac-mutex", "HostB", "ten-owner", "usr-owner", "inst-B", raceWC, epoch, pol.Key); status != hostRegConflict || entry != nil {
+		t.Fatalf("expected hostRegConflict in race window, got status=%v entry=%v", status, entry)
+	}
+	if !hub.isHostConnected("mac-mutex") {
+		t.Fatalf("Host A must remain connected after race-window rejection")
+	}
+
+	// 5. Same instance_id=inst-A reconnects -> smoothly replaces previous Host A connection
+	hostAClosed := make(chan uint16, 1)
+	go func() {
+		op, payload := readTestServerFrame(t, hostABr)
+		if op == opClose && len(payload) >= 2 {
+			hostAClosed <- binary.BigEndian.Uint16(payload[:2])
+			return
+		}
+		hostAClosed <- 0
+	}()
+
+	hostA2Conn, hostA2Br := dialTestWS(t, srv.URL+"/ws/host?host_id=mac-mutex&name=HostA-Reconn&instance_id=inst-A", hostHdr)
+	defer func() { _ = hostA2Conn.Close() }()
+	_, regA2 := readTestServerFrame(t, hostA2Br)
+	var regA2Msg map[string]any
+	if err := json.Unmarshal(regA2[9:], &regA2Msg); err != nil || regA2Msg["type"] != "host_registered" || regA2Msg["name"] != "HostA-Reconn" {
+		t.Fatalf("expected same-instance reconnect to succeed, got %s %v", regA2[9:], err)
+	}
+	select {
+	case code := <-hostAClosed:
+		if code != 1000 {
+			t.Fatalf("expected previous same-instance connection to close with 1000, got %d", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("previous same-instance connection was not closed on smooth replacement")
+	}
+	_ = hostAConn.Close()
+}
+
+func TestRelayHostStrictMutexLegacyBidirectionalCompatibility(t *testing.T) {
+	hub, hostHdr, _ := fixtureRelay("mac-legacy")
+	srv := httptest.NewServer(newMux(hub))
+	defer srv.Close()
+
+	// Case 1: Legacy host (no instance_id) connects first -> new host (with instance_id) AND second legacy host are both rejected with 409
+	legacy1Conn, legacy1Br := dialTestWS(t, srv.URL+"/ws/host?host_id=mac-legacy&name=Legacy1", hostHdr)
+	readTestServerFrame(t, legacy1Br) // host_registered
+
+	respNew, _, _ := dialTestWSRawResponse(t, srv.URL+"/ws/host?host_id=mac-legacy&name=New1&instance_id=inst-new-1", hostHdr)
+	_ = respNew.Body.Close()
+	if respNew.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 when new host tries to kick online legacy host, got %d", respNew.StatusCode)
+	}
+
+	respLegacy2, _, _ := dialTestWSRawResponse(t, srv.URL+"/ws/host?host_id=mac-legacy&name=Legacy2", hostHdr)
+	_ = respLegacy2.Body.Close()
+	if respLegacy2.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 when second legacy host tries to kick online legacy host, got %d", respLegacy2.StatusCode)
+	}
+
+	if !hub.isHostConnected("mac-legacy") {
+		t.Fatalf("legacy host 1 must stay connected")
+	}
+	_ = legacy1Conn.Close()
+
+	// Wait for legacy1 unregister
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && hub.isHostConnected("mac-legacy") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if hub.isHostConnected("mac-legacy") {
+		t.Fatalf("expected legacy host 1 to unregister after close")
+	}
+
+	// Case 2: New host (with instance_id) connects -> legacy host (no instance_id) is rejected with 409 and new host stays alive
+	newConn, newBr := dialTestWS(t, srv.URL+"/ws/host?host_id=mac-legacy&name=New1&instance_id=inst-new-1", hostHdr)
+	defer func() { _ = newConn.Close() }()
+	readTestServerFrame(t, newBr) // host_registered
+
+	respLegacyAfter, _, _ := dialTestWSRawResponse(t, srv.URL+"/ws/host?host_id=mac-legacy&name=LegacyLate", hostHdr)
+	_ = respLegacyAfter.Body.Close()
+	if respLegacyAfter.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 when legacy host tries to kick online new host, got %d", respLegacyAfter.StatusCode)
+	}
+	if !hub.isHostConnected("mac-legacy") {
+		t.Fatalf("new host must stay connected after legacy rejection")
+	}
+}
+
+func TestRelayHostStatusProbeAuthAndVisibility(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "function-config.json")
+	writePolicyFile(t, cfgPath, nil)
+
+	hub := newDynamicRelayHub(cfgPath, "", "web000000010")
+	srv := httptest.NewServer(newMux(hub))
+	defer srv.Close()
+
+	// 1. Unpaired: direct unauthenticated request -> 403
+	resUnauth, _ := http.Get(srv.URL + "/host-status")
+	_ = resUnauth.Body.Close()
+	if resUnauth.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for unauthenticated /host-status when unpaired, got %d", resUnauth.StatusCode)
+	}
+
+	// 2. Unpaired: authenticated Web App Owner -> 200 paired=false hostConnected=false
+	reqOwner, _ := http.NewRequest(http.MethodGet, srv.URL+"/host-status", nil)
+	reqOwner.Header.Set("Tiana-Caller-User-Id", "usr-owner")
+	reqOwner.Header.Set("Tiana-Caller-Tenant-Id", "ten-owner")
+	reqOwner.Header.Set("Tiana-Caller-App-Owner-Id", "usr-owner")
+	reqOwner.Header.Set("Tiana-Caller-Web-Id", "web000000010")
+	resOwnerUnpaired, err := http.DefaultClient.Do(reqOwner)
+	if err != nil {
+		t.Fatalf("owner /host-status: %v", err)
+	}
+	var bodyOwnerUnpaired map[string]any
+	_ = json.NewDecoder(resOwnerUnpaired.Body).Decode(&bodyOwnerUnpaired)
+	_ = resOwnerUnpaired.Body.Close()
+	if resOwnerUnpaired.StatusCode != 200 || bodyOwnerUnpaired["paired"] != false || bodyOwnerUnpaired["hostConnected"] != false {
+		t.Fatalf("unexpected unpaired owner /host-status: %d %+v", resOwnerUnpaired.StatusCode, bodyOwnerUnpaired)
+	}
+
+	// 3. Pair Relay with policy
+	regKey := base64.RawURLEncoding.EncodeToString([]byte("aaaa1111bbbb2222cccc3333dddd4444"))
+	digest := sha256.Sum256([]byte(regKey))
+	digestHex := hex.EncodeToString(digest[:])
+	updatedAt := "2026-11-22T03:00:00Z"
+	time.Sleep(15 * time.Millisecond)
+	writePolicyFile(t, cfgPath, relayAccess{
+		Version:       1,
+		HostID:        "probe-host",
+		HostName:      "Probe Host",
+		HostDigest:    digestHex,
+		OwnerUserID:   "usr-owner",
+		OwnerTenantID: "ten-owner",
+		WebID:         "web000000010",
+		Origin:        "https://example.test",
+		UpdatedAt:     updatedAt,
+	})
+
+	// Unauthorized cases when paired MUST all return 403
+	badRequests := []struct {
+		name    string
+		path    string
+		headers map[string]string
+	}{
+		{"no headers", "/host-status", nil},
+		{"wrong registration key", "/host-status", map[string]string{"Dsh-Host-Registration": base64.RawURLEncoding.EncodeToString([]byte("zzzz9999yyyy8888xxxx7777wwww6666"))}},
+		{"wrong policy digest", "/host-status", map[string]string{"Dsh-Host-Policy-Digest": strings.Repeat("0", 64)}},
+		{"policy digest with Origin header", "/host-status", map[string]string{"Dsh-Host-Policy-Digest": digestHex, "Origin": "https://example.test"}},
+		{"policy digest with mismatched host_id", "/host-status?host_id=other-host", map[string]string{"Dsh-Host-Policy-Digest": digestHex}},
+		{"policy digest with mismatched web_id", "/host-status", map[string]string{"Dsh-Host-Policy-Digest": digestHex, "Dsh-Host-Web-Id": "web999999999"}},
+		{"non-owner caller headers", "/host-status", map[string]string{
+			"Tiana-Caller-User-Id":      "usr-intruder",
+			"Tiana-Caller-Tenant-Id":    "ten-owner",
+			"Tiana-Caller-App-Owner-Id": "usr-owner",
+			"Tiana-Caller-Web-Id":       "web000000010",
+		}},
+		{"policy digest combined with non-owner caller header", "/host-status", map[string]string{
+			"Dsh-Host-Policy-Digest":    digestHex,
+			"Tiana-Caller-User-Id":      "usr-intruder",
+			"Tiana-Caller-Tenant-Id":    "ten-owner",
+			"Tiana-Caller-App-Owner-Id": "usr-owner",
+			"Tiana-Caller-Web-Id":       "web000000010",
+		}},
+	}
+	for _, tc := range badRequests {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodGet, srv.URL+tc.path, nil)
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("do request: %v", err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("expected 403 for %s, got %d", tc.name, resp.StatusCode)
+			}
+		})
+	}
+
+	// Authorized via Dsh-Host-Policy-Digest while host offline -> hostConnected=false
+	reqDigest, _ := http.NewRequest(http.MethodGet, srv.URL+"/host-status?host_id=probe-host", nil)
+	reqDigest.Header.Set("Dsh-Host-Policy-Digest", digestHex)
+	reqDigest.Header.Set("Dsh-Host-Web-Id", "web000000010")
+	resOffline, err := http.DefaultClient.Do(reqDigest)
+	if err != nil {
+		t.Fatalf("digest offline probe: %v", err)
+	}
+	var bodyOffline map[string]any
+	_ = json.NewDecoder(resOffline.Body).Decode(&bodyOffline)
+	_ = resOffline.Body.Close()
+	if resOffline.StatusCode != 200 || bodyOffline["paired"] != true || bodyOffline["hostConnected"] != false ||
+		bodyOffline["hostId"] != "probe-host" || bodyOffline["hostName"] != "Probe Host" || bodyOffline["updatedAt"] != updatedAt {
+		t.Fatalf("unexpected offline /host-status: %d %+v", resOffline.StatusCode, bodyOffline)
+	}
+
+	// Connect host -> both Dsh-Host-Policy-Digest and Dsh-Host-Registration and Owner see hostConnected=true
+	hostHdr := http.Header{}
+	hostHdr.Set("Dsh-Host-Registration", regKey)
+	hostConn, hostBr := dialTestWS(t, srv.URL+"/ws/host?host_id=probe-host&name=Probe+Live&instance_id=inst-probe-1", hostHdr)
+	readTestServerFrame(t, hostBr) // host_registered
+
+	for _, probe := range []struct {
+		name string
+		hdr  http.Header
+	}{
+		{"policy-digest", http.Header{"Dsh-Host-Policy-Digest": {digestHex}, "Dsh-Host-Web-Id": {"web000000010"}}},
+		{"host-registration", hostHdr},
+		{"app-owner", reqOwner.Header},
+	} {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/host-status", nil)
+		req.Header = probe.hdr.Clone()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s /host-status: %v", probe.name, err)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 || body["paired"] != true || body["hostConnected"] != true ||
+			body["hostId"] != "probe-host" || body["hostName"] != "Probe Live" || body["updatedAt"] != updatedAt {
+			t.Fatalf("unexpected online /host-status (%s): %d %+v", probe.name, resp.StatusCode, body)
+		}
+	}
+
+	_ = hostConn.Close()
+}

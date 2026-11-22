@@ -40,6 +40,10 @@ export function defaultRuntimePath() {
   return join(defaultStateDir(), 'runtime.json');
 }
 
+export function defaultRuntimePathForState(statePath = defaultStatePath()) {
+  return join(dirname(resolveStatePath(statePath)), 'runtime.json');
+}
+
 export function defaultBridgeLockPath(statePath = defaultStatePath()) {
   return join(dirname(resolveStatePath(statePath)), 'bridge-owner.json');
 }
@@ -406,6 +410,131 @@ export async function claimBridgeOwnership(
     saveRemoteState(record, lockPath);
     return { acquired: true, owner: record };
   }, targetStatePath);
+}
+
+export function readBridgeOwnership(
+  statePath = defaultStatePath(),
+  { isAlive = isPidAlive } = {},
+) {
+  try {
+    const lockPath = defaultBridgeLockPath(resolveStatePath(statePath));
+    const existing = loadRemoteState(lockPath);
+    if (!existing || !Number.isInteger(existing.pid) || !isAlive(existing.pid)) {
+      return null;
+    }
+    return existing;
+  } catch {
+    return null;
+  }
+}
+
+function extractPortFromOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return null;
+  try {
+    const parsed = new URL(origin);
+    if (parsed.port) {
+      const p = Number(parsed.port);
+      return Number.isInteger(p) && p > 0 ? p : null;
+    }
+    return parsed.protocol === 'https:' ? 443 : parsed.protocol === 'http:' ? 80 : null;
+  } catch {
+    return null;
+  }
+}
+
+export function detectLocalRunningHost({
+  statePath = defaultStatePath(),
+  runtimePath,
+  currentPid = process.pid,
+  isAlive = isPidAlive,
+  readRuntime,
+  readBridgeOwner,
+} = {}) {
+  const targetStatePath = resolveStatePath(statePath);
+  const effectiveRuntimePath = runtimePath || defaultRuntimePathForState(targetStatePath);
+  const bridgeOwner = typeof readBridgeOwner === 'function'
+    ? readBridgeOwner()
+    : readBridgeOwnership(targetStatePath, { isAlive });
+  const runtime = typeof readRuntime === 'function'
+    ? readRuntime()
+    : readRuntimeInfo(effectiveRuntimePath);
+  let existingState = null;
+  try {
+    existingState = loadRemoteState(targetStatePath);
+  } catch {
+    existingState = null;
+  }
+
+  if (bridgeOwner && Number.isInteger(bridgeOwner.pid) && bridgeOwner.pid !== currentPid && isAlive(bridgeOwner.pid)) {
+    const origin = bridgeOwner.advertisedOrigin
+      || bridgeOwner.origin
+      || (runtime?.pid === bridgeOwner.pid ? (runtime.advertisedOrigin || runtime.origin || '') : '');
+    return {
+      running: true,
+      source: 'bridge-owner.json',
+      pid: bridgeOwner.pid,
+      hostId: bridgeOwner.hostId || existingState?.host?.hostId || '',
+      origin,
+      port: extractPortFromOrigin(origin),
+      bridgeOwner,
+      runtime: runtime || null,
+    };
+  }
+
+  if (runtime && Number.isInteger(runtime.pid) && runtime.pid !== currentPid && isAlive(runtime.pid)) {
+    const hasConfiguredBridge = Boolean(
+      existingState?.function?.url && existingState?.host?.hostId && existingState?.enabled !== false,
+    );
+    const origin = runtime.advertisedOrigin || runtime.origin || '';
+    if (hasConfiguredBridge) {
+      return {
+        running: true,
+        source: 'runtime.json',
+        pid: runtime.pid,
+        hostId: existingState.host.hostId,
+        origin,
+        port: extractPortFromOrigin(origin),
+        bridgeOwner: null,
+        runtime,
+      };
+    }
+    return {
+      running: false,
+      unboundRuntime: runtime,
+      bridgeOwner: null,
+      runtime,
+    };
+  }
+
+  return {
+    running: false,
+    bridgeOwner: null,
+    runtime: runtime || null,
+  };
+}
+
+export function formatLocalHostConflictError(info) {
+  const pid = info?.pid ?? 'unknown';
+  const portText = info?.port ? `，端口 ${info.port}` : '';
+  const originText = info?.origin ? `，地址 ${info.origin}` : '';
+  const hostText = info?.hostId ? `，hostId ${info.hostId}` : '';
+  const enPort = info?.port ? `, port ${info.port}` : '';
+  const enOrigin = info?.origin ? `, ${info.origin}` : '';
+  const err = new Error(
+    `检测到本机已有另一个正在运行的 dsh-remote 宿主进程（PID ${pid}${portText}${originText}${hostText}）。请先停止旧进程（例如执行 kill ${pid}）后再重新初始化或绑定。\n` +
+    `Another local dsh-remote host process is already running (PID ${pid}${enPort}${enOrigin}). Stop it first (e.g. kill ${pid}) before initializing or binding.`,
+  );
+  err.code = 'LOCAL_HOST_ALREADY_RUNNING';
+  err.status = 409;
+  err.details = {
+    code: 'LOCAL_HOST_ALREADY_RUNNING',
+    pid: info?.pid ?? null,
+    hostId: info?.hostId || '',
+    origin: info?.origin || '',
+    port: info?.port ?? null,
+    source: info?.source || '',
+  };
+  return err;
 }
 
 export async function releaseBridgeOwnership(

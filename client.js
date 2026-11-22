@@ -407,6 +407,8 @@
       statusPaused: '已暂停监听',
       statusUnconfigured: '尚未绑定',
       statusReconnecting: '正在重连 Relay…',
+      statusConflictStopped: '宿主冲突已停机',
+      statusCredentialsRevoked: '凭据已失效',
       statusLoading: '加载中…',
       statusAccessDenied: '访问受限',
       statusError: '加载失败',
@@ -460,6 +462,16 @@
       conflictBannerTitle: '检测到重复的 DSH 主机进程冲突',
       conflictBannerOwnedByOther: '另一台本地 DSH 进程正在占用 Relay 连接，本进程已暂停重复建连以避免断线循环。请关闭多余的 DSH 实例。',
       conflictBannerRelayKicked: '当前 Relay 连接被同 host_id 的另一个主机实例顶替，已启用退避重连。请检查并停止本机多余的 DSH 进程。',
+      conflictBannerTerminal: '已有另一个宿主实例在线，本机已立即停止自动重连以防互踢。请先停止旧实例后再点击「重试连接」，或在确认旧实例失联时选择「强制接管」。',
+      revokedBannerTitle: '连接凭据已失效（可能已被其他宿主接管或解绑）',
+      revokedBannerBody: 'Relay 拒绝了当前主机凭据（HTTP 403），本机已停止自动重连。请重新绑定，或点击「强制接管」轮换 registrationKey 重新接管此云端应用。',
+      retryConnectBtn: '重试连接',
+      retryingConnect: '正在重连…',
+      forceTakeoverBtn: '强制接管',
+      forceTakeoverConfirmTitle: '确认强制接管云端 Relay？',
+      forceTakeoverConfirmBody: '强制接管将强制轮换 registrationKey 并写入云端新策略，使原在线宿主的旧凭据立即失效（旧宿主收到 403 后将自动停机）。请确认旧宿主已停止或失联后再继续。',
+      forceTakeoverConfirmBtn: '确认强制接管',
+      activeHostLabel: '当前在线宿主',
       saveSettings: '保存设置',
       resetDraft: '放弃未保存更改',
       saving: '保存中…',
@@ -502,6 +514,8 @@
       statusPaused: 'Paused',
       statusUnconfigured: 'Not configured',
       statusReconnecting: 'Reconnecting…',
+      statusConflictStopped: 'Stopped (Host Conflict)',
+      statusCredentialsRevoked: 'Credentials Revoked',
       statusLoading: 'Loading…',
       statusAccessDenied: 'Access Denied',
       statusError: 'Error',
@@ -555,6 +569,16 @@
       conflictBannerTitle: 'Duplicate DSH Host Process Conflict Detected',
       conflictBannerOwnedByOther: 'Another live DSH process currently owns the Relay bridge. This instance paused duplicate connection attempts to prevent reconnect loops. Stop extra DSH processes.',
       conflictBannerRelayKicked: 'The Relay connection was replaced by another host using the same host_id. Backoff is active; stop duplicate DSH instances to stabilize.',
+      conflictBannerTerminal: 'Another host instance is already connected to this Relay. Auto-reconnect has been stopped to prevent kick loops. Stop the existing host and click Retry Connection, or choose Force Takeover if the old machine is unreachable.',
+      revokedBannerTitle: 'Host Credentials Revoked (Taken Over or Unbound)',
+      revokedBannerBody: 'The Relay rejected this host’s credentials (HTTP 403) and auto-reconnect has stopped. Rebind this host or choose Force Takeover to rotate registrationKey and reclaim the app.',
+      retryConnectBtn: 'Retry Connection',
+      retryingConnect: 'Reconnecting…',
+      forceTakeoverBtn: 'Force Takeover',
+      forceTakeoverConfirmTitle: 'Confirm Force Takeover?',
+      forceTakeoverConfirmBody: 'Force takeover rotates registrationKey and overwrites the cloud Relay policy so the previous host’s credentials immediately return 403 and stop. Continue only if the old host is offline/unreachable or you intend to replace it.',
+      forceTakeoverConfirmBtn: 'Confirm Force Takeover',
+      activeHostLabel: 'Active Online Host',
       saveSettings: 'Save Settings',
       resetDraft: 'Discard Unsaved Edits',
       saving: 'Saving…',
@@ -860,9 +884,12 @@
       const [createWebName, setCreateWebName] = useState('DSH Remote');
       const [rebindWebId, setRebindWebId] = useState('');
       const [provisionStatus, setProvisionStatus] = useState(null);
+      const [lastProvisionPayload, setLastProvisionPayload] = useState(null);
+      const [pendingForceTakeover, setPendingForceTakeover] = useState(null);
 
       const rotateDialogRef = useRef(null);
       const qrDialogRef = useRef(null);
+      const forceTakeoverDialogRef = useRef(null);
 
       const hydrateDraftsFromOverview = useCallback((data) => {
         if (!data) return;
@@ -1235,10 +1262,14 @@
       const endpoint = overview?.web?.endpoint || '';
       const tokenExpiresAt = overview?.function?.expiresAt;
       const bridgeConflict = overview?.bridgeConflict || null;
-      const relayHostConflict = Boolean(overview?.bridge?.hostConflict);
+      const terminalState = overview?.bridge?.terminalState || null;
+      const isTerminalConflict = terminalState === 'conflict_active_host';
+      const isCredentialsRevoked = terminalState === 'credentials_revoked' || Boolean(overview?.bridge?.credentialsRevoked);
+      const relayHostConflict = Boolean(overview?.bridge?.hostConflict) || isTerminalConflict;
 
       const startProvisionRequest = async (payload) => {
         setBusy('provision');
+        setLastProvisionPayload(payload);
         try {
           const resp = await fetch('/api/tiana-remote/admin/provision', {
             method: 'POST',
@@ -1247,11 +1278,58 @@
           });
           const data = await resp.json().catch(() => ({}));
           if (!resp.ok) {
-            setProvisionStatus({ running: false, step: 'error', logs: [], error: data.error || `HTTP ${resp.status}` });
+            setProvisionStatus({
+              running: false,
+              step: 'error',
+              logs: [],
+              error: data.error || `HTTP ${resp.status}`,
+              errorCode: data.code || null,
+              errorDetails: data.details || null,
+            });
             return;
           }
-          setProvisionStatus({ running: true, step: data.step || 'starting', logs: [], error: null });
+          setProvisionStatus({
+            running: true,
+            step: data.step || 'starting',
+            logs: [],
+            error: null,
+            errorCode: null,
+            errorDetails: null,
+          });
           await pollProvisionStatus();
+        } finally {
+          setBusy('');
+        }
+      };
+
+      const openForceTakeoverConfirm = (payload, activeHost = null) => {
+        setPendingForceTakeover({
+          payload: { ...payload, rebind: true, forceRebind: true },
+          activeHost,
+        });
+        forceTakeoverDialogRef.current?.showModal?.();
+      };
+
+      const handleConfirmForceTakeover = async () => {
+        const req = pendingForceTakeover?.payload;
+        setPendingForceTakeover(null);
+        if (!req) return;
+        await startProvisionRequest(req);
+      };
+
+      const handleReconnectBridge = async () => {
+        setBusy('reconnect');
+        try {
+          const resp = await fetch('/api/tiana-remote/admin/reconnect', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) {
+            setToast(data.error || `Reconnect failed (HTTP ${resp.status})`);
+          }
+          await fetchState();
         } finally {
           setBusy('');
         }
@@ -1400,6 +1478,13 @@
 
       const renderProvisionProgress = () => {
         if (!provisionStatus) return null;
+        const isActiveHostConflict = provisionStatus.step === 'error' && provisionStatus.errorCode === 'ACTIVE_HOST_ONLINE';
+        const activeHostInfo = provisionStatus.errorDetails || null;
+        const takeoverTarget = lastProvisionPayload || (
+          activeHostInfo?.webId
+            ? { mode: 'bind', webId: activeHostInfo.webId, hostName: hostNameDraft.trim() || bindHostName.trim() || undefined }
+            : null
+        );
         return h('div', { id: 'dshr-provision-progress', style: { display: 'grid', gap: 8 } },
           h('div', { className: 'dshr-row' },
             h('span', { className: 'dshr-badge' },
@@ -1407,6 +1492,15 @@
             ),
           ),
           provisionStatus.error && h('div', { className: 'dshr-err' }, provisionStatus.error),
+          isActiveHostConflict && takeoverTarget && h('div', { className: 'dshr-row' },
+            h('button', {
+              type: 'button',
+              id: 'dshr-provision-force-takeover-btn',
+              className: 'dshr-btn dshr-btn-danger',
+              disabled: busy === 'provision',
+              onClick: () => openForceTakeoverConfirm(takeoverTarget, activeHostInfo),
+            }, t('forceTakeoverBtn')),
+          ),
           Array.isArray(provisionStatus.logs) && provisionStatus.logs.length > 0 &&
             h('pre', { className: 'dshr-logs' }, provisionStatus.logs.join('\n')),
         );
@@ -1440,15 +1534,27 @@
             ? t('statusUnconfigured')
             : !enabled
               ? t('statusPaused')
-              : relayConnected
-                ? t('statusOnline')
-                : t('statusReconnecting');
+              : isCredentialsRevoked
+                ? t('statusCredentialsRevoked')
+                : isTerminalConflict
+                  ? t('statusConflictStopped')
+                  : relayConnected
+                    ? t('statusOnline')
+                    : t('statusReconnecting');
 
-      const statusDotClass = isAdminLoadError
+      const statusDotClass = isAdminLoadError || isCredentialsRevoked || isTerminalConflict
         ? 'is-error'
         : isAdminLoadingInitial
           ? 'is-warn'
           : (enabled && relayConnected ? 'is-online' : enabled ? 'is-warn' : '');
+
+      const currentAppTakeoverPayload = overview?.web?.id
+        ? {
+            mode: 'bind',
+            webId: overview.web.id,
+            hostName: overview?.host?.hostName || undefined,
+          }
+        : null;
 
       return h('div', { className: 'dshr-root', 'data-dshr-mode': 'local' },
         h('div', { className: 'dshr-wrap' },
@@ -1485,11 +1591,66 @@
             h('div', { className: 'dshr-card-head' },
               h('h3', { className: 'dshr-card-title' }, t('conflictBannerTitle')),
               bridgeConflict?.ownerPid && h('span', { className: 'dshr-badge' }, `PID ${bridgeConflict.ownerPid}`),
+              !bridgeConflict && isTerminalConflict && h('span', { className: 'dshr-badge' },
+                overview?.bridge?.lastCloseCode === 4009 ? 'WS 4009' : 'HTTP 409',
+              ),
             ),
-            h('div', { className: 'dshr-warn' },
+            h('div', { className: isTerminalConflict ? 'dshr-err' : 'dshr-warn' },
               bridgeConflict
                 ? `${t('conflictBannerOwnedByOther')}${bridgeConflict.ownerOrigin ? ` (${bridgeConflict.ownerOrigin})` : ''}`
-                : t('conflictBannerRelayKicked'),
+                : isTerminalConflict
+                  ? t('conflictBannerTerminal')
+                  : t('conflictBannerRelayKicked'),
+            ),
+            h('div', { className: 'dshr-row' },
+              h('button', {
+                type: 'button',
+                id: 'dshr-retry-connect-btn',
+                className: 'dshr-btn dshr-btn-primary',
+                disabled: busy === 'reconnect',
+                onClick: () => void handleReconnectBridge(),
+              }, busy === 'reconnect' ? t('retryingConnect') : t('retryConnectBtn')),
+              isTerminalConflict && currentAppTakeoverPayload && h('button', {
+                type: 'button',
+                id: 'dshr-force-takeover-btn',
+                className: 'dshr-btn dshr-btn-danger',
+                disabled: busy === 'provision' || Boolean(provisionStatus?.running),
+                onClick: () => openForceTakeoverConfirm(currentAppTakeoverPayload, {
+                  hostId: overview?.host?.hostId || '',
+                  hostName: overview?.host?.hostName || '',
+                }),
+              }, t('forceTakeoverBtn')),
+            ),
+          ),
+
+          showConfiguredPanel && isCredentialsRevoked && h('div', {
+            className: 'dshr-card',
+            id: 'dshr-credentials-revoked-banner',
+            role: 'alert',
+          },
+            h('div', { className: 'dshr-card-head' },
+              h('h3', { className: 'dshr-card-title' }, t('revokedBannerTitle')),
+              h('span', { className: 'dshr-badge' }, 'HTTP 403'),
+            ),
+            h('div', { className: 'dshr-err' }, t('revokedBannerBody')),
+            h('div', { className: 'dshr-row' },
+              currentAppTakeoverPayload && h('button', {
+                type: 'button',
+                id: 'dshr-revoked-force-takeover-btn',
+                className: 'dshr-btn dshr-btn-danger',
+                disabled: busy === 'provision' || Boolean(provisionStatus?.running),
+                onClick: () => openForceTakeoverConfirm(currentAppTakeoverPayload, {
+                  hostId: overview?.host?.hostId || '',
+                  hostName: overview?.host?.hostName || '',
+                }),
+              }, t('forceTakeoverBtn')),
+              h('button', {
+                type: 'button',
+                id: 'dshr-revoked-retry-connect-btn',
+                className: 'dshr-btn',
+                disabled: busy === 'reconnect',
+                onClick: () => void handleReconnectBridge(),
+              }, busy === 'reconnect' ? t('retryingConnect') : t('retryConnectBtn')),
             ),
           ),
 
@@ -1836,6 +1997,31 @@
             h('p', { style: { margin: '12px 0 14px', fontSize: 12, lineHeight: 1.5, opacity: 0.85 } }, t('qrHint')),
             h('form', { method: 'dialog', className: 'dshr-row', style: { justifyContent: 'flex-end' } },
               h('button', { type: 'submit', value: 'close', autoFocus: true, className: 'dshr-btn' }, t('close')),
+            ),
+          ),
+
+          // Native modal <dialog> for explicit secondary confirmation of Force Takeover (autofocus on safe Cancel)
+          h('dialog', {
+            ref: forceTakeoverDialogRef,
+            className: 'dshr-dialog',
+            id: 'dshr-force-takeover-dialog',
+            'aria-labelledby': 'dshr-force-takeover-title',
+            onClose: (e) => {
+              const dialog = e.currentTarget;
+              const val = dialog.returnValue;
+              dialog.returnValue = '';
+              if (val === 'confirm') void handleConfirmForceTakeover();
+              else setPendingForceTakeover(null);
+            },
+          },
+            h('h3', { id: 'dshr-force-takeover-title', style: { margin: '0 0 8px', fontSize: 16 } }, t('forceTakeoverConfirmTitle')),
+            pendingForceTakeover?.activeHost && (pendingForceTakeover.activeHost.hostName || pendingForceTakeover.activeHost.hostId) && h('p', {
+              style: { margin: '0 0 8px', fontSize: 13, fontWeight: 600 },
+            }, `${t('activeHostLabel')}: ${pendingForceTakeover.activeHost.hostName || pendingForceTakeover.activeHost.hostId}${pendingForceTakeover.activeHost.hostId ? ` (${pendingForceTakeover.activeHost.hostId})` : ''}`),
+            h('p', { style: { margin: '0 0 16px', fontSize: 13, lineHeight: 1.5, opacity: 0.85 } }, t('forceTakeoverConfirmBody')),
+            h('form', { method: 'dialog', className: 'dshr-row', style: { justifyContent: 'flex-end' } },
+              h('button', { type: 'submit', value: 'cancel', autoFocus: true, className: 'dshr-btn', id: 'dshr-force-takeover-cancel' }, t('cancel')),
+              h('button', { type: 'submit', value: 'confirm', className: 'dshr-btn dshr-btn-danger', id: 'dshr-force-takeover-confirm' }, t('forceTakeoverConfirmBtn')),
             ),
           ),
         ),

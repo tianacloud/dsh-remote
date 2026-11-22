@@ -75,6 +75,8 @@ export function createHostController(options = {}) {
     step: 'idle',
     logs: [],
     error: null,
+    errorCode: null,
+    errorDetails: null,
     completedAt: null,
   };
 
@@ -179,7 +181,7 @@ export function createHostController(options = {}) {
     conflictRetryTimer.unref?.();
   }
 
-  async function syncBridgeWithState() {
+  async function syncBridgeWithState({ forceRestart = false } = {}) {
     if (disposed) return;
     if (process.env.DSH_REMOTE_DISABLE === '1') {
       stopBridge();
@@ -202,7 +204,7 @@ export function createHostController(options = {}) {
     }
 
     const sig = stateSignature(state);
-    if (bridge && activeStateKey === sig) {
+    if (!forceRestart && bridge && activeStateKey === sig && !bridge.terminalState) {
       // Hot-update mutable settings (secret rotation, network, plugins) without dropping Relay WS
       const eff = effectiveConfig(state);
       if (bridge.e2eeSecret !== state.e2ee.secret) {
@@ -256,7 +258,15 @@ export function createHostController(options = {}) {
     stopBridge({ releaseOwnership: false });
     bridge = createBridge(buildBridgeOptions(state));
     activeStateKey = sig;
-    await bridge.start();
+    try {
+      await bridge.start();
+    } catch (err) {
+      if (err?.terminalState || bridge?.terminalState) {
+        log(`[dsh-remote] HostBridge entered terminal state (${err?.terminalState || bridge?.terminalState}): ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      throw err;
+    }
     if (!disposed) {
       log(`[dsh-remote] E2EE active (${state.e2ee.algorithm}, key ${state.e2ee.fingerprint})`);
       log(`[dsh-remote] Remote access ready: ${state.web?.endpoint}`);
@@ -439,6 +449,10 @@ export function createHostController(options = {}) {
         running: false,
         relayConnected: false,
         hostConflict: Boolean(bridgeConflict),
+        credentialsRevoked: false,
+        terminalState: null,
+        terminalReason: '',
+        lastHttpStatus: null,
         lastCloseCode: null,
         lastCloseReason: '',
         sessions: [],
@@ -707,6 +721,26 @@ export function createHostController(options = {}) {
       return { expiresAt: committed.expiresAt, tokenId: committed.tokenId };
     },
 
+    async reconnectBridge() {
+      if (process.env.DSH_REMOTE_DISABLE === '1') {
+        throw Object.assign(new Error('Remote access is disabled by DSH_REMOTE_DISABLE=1 environment variable'), { status: 409 });
+      }
+      const state = loadNormalizedRemoteState(statePath);
+      if (!state?.function?.url || !state?.host?.hostId) {
+        throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
+      }
+      if (!state.enabled) {
+        throw Object.assign(new Error('Remote access is paused; enable it before reconnecting'), { status: 409 });
+      }
+      stopBridge({ releaseOwnership: true });
+      await syncBridgeWithState({ forceRestart: true });
+      return {
+        bridge: bridge?.getStatusSnapshot() || null,
+        bridgeConflict,
+        relayConnected: Boolean(bridge?.registered),
+      };
+    },
+
     startProvision(body = {}) {
       if (provisionTask.running) return { started: false };
       provisionTask = {
@@ -714,38 +748,53 @@ export function createHostController(options = {}) {
         step: 'starting',
         logs: [],
         error: null,
+        errorCode: null,
+        errorDetails: null,
         completedAt: null,
       };
       const pushLog = (msg) => {
         provisionTask.logs.push(String(msg));
         if (provisionTask.logs.length > 100) provisionTask.logs.shift();
       };
+      const bindFn = options.bindRemoteWeb || bindTianaRemoteWeb;
+      const provisionFn = options.provisionRemote || provisionTianaRemote;
       void (async () => {
         try {
           if (body.mode === 'bind' && body.webId) {
             provisionTask.step = 'binding';
-            await bindTianaRemoteWeb({
+            await bindFn({
               webId: body.webId,
               hostName: body.hostName,
               rebind: Boolean(body.rebind),
+              forceRebind: Boolean(body.forceRebind),
               statePath,
+              runtimePath,
+              probeRelayHealth: options.probeRelayHealth,
+              probeRelayHostStatus: options.probeRelayHostStatus,
+              tianaBin: options.tianaBin,
               log: pushLog,
             });
           } else {
             provisionTask.step = 'provisioning';
-            await provisionTianaRemote({
+            await provisionFn({
               webName: body.webName,
               hostName: body.hostName,
+              forceRebind: Boolean(body.forceRebind),
               statePath,
+              runtimePath,
+              probeRelayHostStatus: options.probeRelayHostStatus,
+              tianaBin: options.tianaBin,
               log: pushLog,
             });
           }
           provisionTask.step = 'connecting';
-          await syncBridgeWithState();
+          await syncBridgeWithState({ forceRestart: Boolean(body.forceRebind) });
           provisionTask.step = 'done';
         } catch (err) {
           provisionTask.step = 'error';
           provisionTask.error = err instanceof Error ? err.message : String(err);
+          provisionTask.errorCode = err?.code || null;
+          provisionTask.errorDetails = err?.details || null;
         } finally {
           provisionTask.running = false;
           provisionTask.completedAt = new Date().toISOString();

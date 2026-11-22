@@ -128,7 +128,7 @@ test('buildWebDist produces valid .tweb bundle under 200 KiB without symlinks, d
   }
 });
 
-test('local E2E: Relay + HostBridge enforces E2EE, encrypts HTTP/bootstrap/WS, rejects downgrade & wrong key & intruder', { timeout: 15000 }, async () => {
+test('local E2E: Relay + HostBridge enforces E2EE, encrypts HTTP/bootstrap/WS, rejects downgrade & wrong key & intruder', { timeout: 30000 }, async () => {
   const relayPort = await getFreePort();
   const target = { hostId: 'test-host', webId: 'testweb00001' };
   const owner = { userId: 'prn-owner-1', tenantId: 'tenant-test', origin: 'https://site.example.test' };

@@ -387,16 +387,62 @@ type hostInfo struct {
 }
 
 type hostEntry struct {
-	id          string
-	name        string
-	tenantID    string
-	userID      string
-	webID       string
-	policyEpoch uint64
-	connectedAt int64
-	conn        *wsConn
-	mu          sync.Mutex
-	sessions    map[uint32]*clientSession
+	id                  string
+	name                string
+	instanceID          string
+	hasClientInstanceID bool
+	tenantID            string
+	userID              string
+	webID               string
+	policyEpoch         uint64
+	connectedAt         int64
+	conn                *wsConn
+	mu                  sync.Mutex
+	sessions            map[uint32]*clientSession
+}
+
+type hostRegStatus int
+
+const (
+	hostRegOK hostRegStatus = iota
+	hostRegPolicyChanged
+	hostRegConflict
+)
+
+var anonInstanceSeq atomic.Uint64
+
+func validInstanceID(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func generateEphemeralInstanceID() string {
+	var buf [12]byte
+	if _, err := rand.Read(buf[:]); err == nil {
+		return "anon-" + hex.EncodeToString(buf[:])
+	}
+	var seq [8]byte
+	binary.BigEndian.PutUint64(seq[:], anonInstanceSeq.Add(1))
+	return "anon-seq-" + hex.EncodeToString(seq[:])
+}
+
+func canReplaceHost(prev *hostEntry, incomingInstanceID string, incomingHasClientInstanceID bool) bool {
+	if prev == nil {
+		return true
+	}
+	if prev.conn != nil && prev.conn.closed.Load() {
+		return true
+	}
+	return prev.hasClientInstanceID && incomingHasClientInstanceID &&
+		prev.instanceID != "" && prev.instanceID == incomingInstanceID
 }
 
 type callerIdentity struct {
@@ -950,12 +996,37 @@ func (h *relayHub) applyPolicy(pol resolvedPolicy) uint64 {
 }
 
 func (h *relayHub) isHostConnected(hostID string) bool {
+	connected, _ := h.hostConnectionSnapshot(hostID)
+	return connected
+}
+
+func (h *relayHub) hostConnectionSnapshot(hostID string) (bool, string) {
 	if hostID == "" {
-		return false
+		return false, ""
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.hosts[hostID] != nil
+	entry := h.hosts[hostID]
+	if entry == nil || (entry.conn != nil && entry.conn.closed.Load()) {
+		return false, ""
+	}
+	return true, entry.name
+}
+
+func (h *relayHub) checkHostConflict(id, clientInstanceID string, hasClientInstanceID bool, expectedEpoch uint64, expectedPolicyKey string) (bool, string, string) {
+	if id == "" {
+		return false, "", ""
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.policyEpoch != expectedEpoch || !h.paired || h.policyKey != expectedPolicyKey {
+		return false, "", ""
+	}
+	prev := h.hosts[id]
+	if prev != nil && !canReplaceHost(prev, clientInstanceID, hasClientInstanceID) {
+		return true, prev.id, prev.name
+	}
+	return false, "", ""
 }
 
 func (h *relayHub) listHosts() []hostInfo {
@@ -1038,44 +1109,62 @@ func (h *relayHub) broadcastHostOnline(entry *hostEntry, hostDigest string) {
 }
 
 func (h *relayHub) registerHost(id, name, tenantID, userID string, conn *wsConn, expectedEpoch uint64, expectedPolicyKey string) (*hostEntry, bool) {
+	entry, status := h.registerHostWithInstance(id, name, tenantID, userID, "", conn, expectedEpoch, expectedPolicyKey)
+	return entry, status == hostRegOK
+}
+
+func (h *relayHub) registerHostWithInstance(id, name, tenantID, userID, clientInstanceID string, conn *wsConn, expectedEpoch uint64, expectedPolicyKey string) (*hostEntry, hostRegStatus) {
 	if id == "" {
 		id = "default"
 	}
 	if name == "" {
 		name = id
 	}
+	hasClientInstance := clientInstanceID != ""
+	effInstanceID := clientInstanceID
+	if !hasClientInstance {
+		effInstanceID = generateEphemeralInstanceID()
+	}
 	entry := &hostEntry{
-		id:          id,
-		name:        name,
-		tenantID:    tenantID,
-		userID:      userID,
-		connectedAt: time.Now().UnixMilli(),
-		conn:        conn,
-		sessions:    make(map[uint32]*clientSession),
+		id:                  id,
+		name:                name,
+		instanceID:          effInstanceID,
+		hasClientInstanceID: hasClientInstance,
+		tenantID:            tenantID,
+		userID:              userID,
+		connectedAt:         time.Now().UnixMilli(),
+		conn:                conn,
+		sessions:            make(map[uint32]*clientSession),
 	}
 
 	h.mu.Lock()
 	if h.policyEpoch != expectedEpoch || !h.paired || h.policyKey != expectedPolicyKey ||
 		h.access.HostID != id || h.access.OwnerUserID != userID || h.access.OwnerTenantID != tenantID {
 		h.mu.Unlock()
-		return nil, false
+		return nil, hostRegPolicyChanged
+	}
+	prev := h.hosts[id]
+	if prev != nil && !canReplaceHost(prev, effInstanceID, hasClientInstance) {
+		h.mu.Unlock()
+		return nil, hostRegConflict
 	}
 	entry.webID = h.access.WebID
 	entry.policyEpoch = h.policyEpoch
 	hostDigest := h.access.HostDigest
-	prev := h.hosts[id]
 	h.hosts[id] = entry
 	overflowed := h.enqueueHostOnlineLocked(entry, hostDigest)
 	h.mu.Unlock()
 
 	if prev != nil {
 		prev.disconnectClients("host reconnected")
-		prev.conn.close(1000, "replaced by newer host connection")
+		if prev.conn != nil {
+			prev.conn.close(1000, "replaced by same host instance")
+		}
 	}
 	for _, c := range overflowed {
 		c.close(1008, "control queue overflow")
 	}
-	return entry, true
+	return entry, hostRegOK
 }
 
 func (h *relayHub) registerClient(session *clientSession, expectedEpoch uint64, expectedPolicyKey string, expectedPaired bool) bool {
@@ -1288,6 +1377,35 @@ func verifyHostAuth(r *http.Request, hostID string, access relayAccess) bool {
 	return true
 }
 
+func verifyHostPolicyDigest(r *http.Request, access relayAccess) bool {
+	if len(r.Header.Values("Origin")) != 0 || hasAnyCallerHeader(r.Header) {
+		return false
+	}
+	if access.HostDigest == "" {
+		return false
+	}
+	want, err := hex.DecodeString(access.HostDigest)
+	if err != nil || len(want) != sha256.Size {
+		return false
+	}
+	gotHex, gotCount := singleHeaderExact(r.Header, "Dsh-Host-Policy-Digest")
+	if gotCount != 1 || len(gotHex) != sha256.Size*2 {
+		return false
+	}
+	got, err := hex.DecodeString(gotHex)
+	if err != nil || len(got) != sha256.Size {
+		return false
+	}
+	if subtle.ConstantTimeCompare(want, got) != 1 {
+		return false
+	}
+	webHdr, webCount := singleHeaderExact(r.Header, "Dsh-Host-Web-Id")
+	if webCount > 1 || (webCount == 1 && access.WebID != "" && webHdr != access.WebID) {
+		return false
+	}
+	return true
+}
+
 func (h *relayHub) handleHostWS(w http.ResponseWriter, r *http.Request) {
 	pol, epoch, err := h.syncPolicy()
 	if err != nil {
@@ -1301,6 +1419,24 @@ func (h *relayHub) handleHostWS(w http.ResponseWriter, r *http.Request) {
 	hostID := r.URL.Query().Get("host_id")
 	if !verifyHostAuth(r, hostID, pol.Access) {
 		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	clientInstanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
+	if clientInstanceID != "" && !validInstanceID(clientInstanceID) {
+		http.Error(w, "invalid instance_id", http.StatusBadRequest)
+		return
+	}
+	hasClientInstance := clientInstanceID != ""
+	if conflict, existingID, existingName := h.checkHostConflict(hostID, clientInstanceID, hasClientInstance, epoch, pol.Key); conflict {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":       false,
+			"error":    "host_already_connected",
+			"hostId":   existingID,
+			"hostName": existingName,
+		})
 		return
 	}
 	if !acquire(h.peers) {
@@ -1321,8 +1457,12 @@ func (h *relayHub) handleHostWS(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantID, userID := pol.Access.OwnerTenantID, pol.Access.OwnerUserID
 
-	entry, ok := h.registerHost(hostID, name, tenantID, userID, conn, epoch, pol.Key)
-	if !ok {
+	entry, regStatus := h.registerHostWithInstance(hostID, name, tenantID, userID, clientInstanceID, conn, epoch, pol.Key)
+	if regStatus == hostRegConflict {
+		conn.close(4009, "host_already_connected")
+		return
+	}
+	if regStatus != hostRegOK {
 		conn.close(1012, "policy updated")
 		return
 	}
@@ -1669,12 +1809,95 @@ func (h *relayHub) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *relayHub) handleHostStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pol, _, err := h.syncPolicy()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": "invalid policy"})
+		return
+	}
+
+	if hasAnyCallerHeader(r.Header) {
+		caller, ok := callerFromRequest(r)
+		if !ok || !caller.IsAppOwner() {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if pol.Paired {
+			if caller.UserID != pol.Access.OwnerUserID ||
+				caller.TenantID != pol.Access.OwnerTenantID ||
+				(pol.Access.WebID != "" && caller.WebID != pol.Access.WebID) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		} else if pol.Access.WebID != "" && caller.WebID != "" && caller.WebID != pol.Access.WebID {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	} else {
+		if len(r.Header.Values("Origin")) != 0 || !pol.Paired {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		reqHostID := strings.TrimSpace(r.URL.Query().Get("host_id"))
+		if reqHostID != "" && reqHostID != pol.Access.HostID {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if !verifyHostAuth(r, pol.Access.HostID, pol.Access) && !verifyHostPolicyDigest(r, pol.Access) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
+
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if !pol.Paired {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":            true,
+			"paired":        false,
+			"hostConnected": false,
+			"hostId":        "",
+			"hostName":      "",
+			"updatedAt":     "",
+		})
+		return
+	}
+
+	connected, activeName := h.hostConnectionSnapshot(pol.Access.HostID)
+	hostName := activeName
+	if hostName == "" {
+		hostName = pol.Access.HostName
+	}
+	if hostName == "" {
+		hostName = pol.Access.HostID
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":            true,
+		"paired":        true,
+		"hostConnected": connected,
+		"hostId":        pol.Access.HostID,
+		"hostName":      hostName,
+		"updatedAt":     pol.Access.UpdatedAt,
+	})
+}
+
 func newMux(hub *relayHub) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", hub.handleHealth)
 	mux.HandleFunc("/healthz", hub.handleHealth)
 	mux.HandleFunc("/status", hub.handleStatus)
 	mux.HandleFunc("/info", hub.handleStatus)
+	mux.HandleFunc("/host-status", hub.handleHostStatus)
 	mux.HandleFunc("/host", hub.handleHostWS)
 	mux.HandleFunc("/ws/host", hub.handleHostWS)
 	mux.HandleFunc("/client", hub.handleClientWS)

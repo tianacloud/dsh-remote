@@ -9,7 +9,9 @@ import { buildWebDist } from '../scripts/build-web-dist.mjs';
 import {
   defaultHostIdentity,
   DEFAULT_STUN_URLS,
+  detectLocalRunningHost,
   ensureE2eeConfig,
+  formatLocalHostConflictError,
   generateE2eeSecret,
   loadRemoteState,
   loadRemoteStateSnapshot,
@@ -230,6 +232,123 @@ export async function verifyRelayHealth(fnUrl, token, options = {}) {
     throw new Error('Target Function /healthz payload does not match DSH Remote Relay contract');
   }
   return body;
+}
+
+export function buildActiveHostOnlineError({
+  webId = '',
+  functionId = '',
+  hostId = '',
+  hostName = '',
+  updatedAt = '',
+} = {}) {
+  const displayName = hostName || hostId || 'unknown';
+  const idPart = hostId ? ` (${hostId})` : '';
+  const err = new Error(
+    `检测到该云端 Relay 当前已有活跃宿主 "${displayName}${idPart}" 在线，请先停止旧宿主再重新设置。` +
+    `如确认旧宿主已失联需要强制接管，请使用 --force-rebind（将强制轮换 registrationKey 使旧凭据立即失效）。\n` +
+    `Active host "${displayName}"${idPart} is currently connected to this Relay. ` +
+    `Stop the active host before re-initializing, or pass --force-rebind to force takeover and rotate registrationKey.`,
+  );
+  err.code = 'ACTIVE_HOST_ONLINE';
+  err.status = 409;
+  err.details = {
+    code: 'ACTIVE_HOST_ONLINE',
+    webId,
+    functionId,
+    hostConnected: true,
+    hostId: hostId || '',
+    hostName: displayName,
+    updatedAt: updatedAt || '',
+  };
+  return err;
+}
+
+export async function probeRelayHostStatus(fnUrl, token, {
+  existingPolicy = null,
+  registrationKey = '',
+  hostId = '',
+  webId = '',
+  fetchFn = fetch,
+  probeRelayHostStatus: customProbe,
+  allowInsecureLoopback = false,
+  statusTimeoutMs = 10_000,
+} = {}) {
+  if (typeof customProbe === 'function') {
+    return await customProbe(fnUrl, token, { existingPolicy, registrationKey, hostId, webId });
+  }
+  const statusUrl = new URL('/host-status', fnUrl);
+  const isLoopbackHttp = allowInsecureLoopback && statusUrl.protocol === 'http:' &&
+    ['127.0.0.1', '[::1]', 'localhost'].includes(statusUrl.hostname);
+  if ((statusUrl.protocol !== 'https:' && !isLoopbackHttp) || statusUrl.username || statusUrl.password) {
+    throw new Error('Relay host status probe requires HTTPS URL');
+  }
+  const targetHostId = existingPolicy?.hostId || hostId || '';
+  if (targetHostId) {
+    statusUrl.searchParams.set('host_id', targetHostId);
+  }
+  const headers = { Accept: 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (existingPolicy?.hostDigest) {
+    headers['Dsh-Host-Policy-Digest'] = existingPolicy.hostDigest;
+  }
+  if (existingPolicy?.webId || webId) {
+    headers['Dsh-Host-Web-Id'] = existingPolicy?.webId || webId;
+  }
+  if (registrationKey) {
+    headers['Dsh-Host-Registration'] = registrationKey;
+  }
+  const resp = await fetchFn(statusUrl, {
+    method: 'GET',
+    headers,
+    redirect: 'error',
+    signal: AbortSignal.timeout(statusTimeoutMs),
+  });
+  if (resp.status === 404) {
+    return {
+      supported: false,
+      ok: false,
+      paired: Boolean(existingPolicy),
+      hostConnected: false,
+      hostId: existingPolicy?.hostId || '',
+      hostName: existingPolicy?.hostName || '',
+      updatedAt: existingPolicy?.updatedAt || '',
+    };
+  }
+  if (resp.status === 403) {
+    return {
+      supported: true,
+      authorized: false,
+      ok: false,
+      status: 403,
+      paired: Boolean(existingPolicy),
+      hostConnected: false,
+      hostId: existingPolicy?.hostId || '',
+      hostName: existingPolicy?.hostName || '',
+      updatedAt: existingPolicy?.updatedAt || '',
+    };
+  }
+  if (!resp.ok) {
+    return {
+      supported: true,
+      ok: false,
+      status: resp.status,
+      paired: Boolean(existingPolicy),
+      hostConnected: false,
+      hostId: existingPolicy?.hostId || '',
+      hostName: existingPolicy?.hostName || '',
+      updatedAt: existingPolicy?.updatedAt || '',
+    };
+  }
+  const body = await resp.json().catch(() => null);
+  return {
+    supported: true,
+    ok: body?.ok !== false,
+    paired: Boolean(body?.paired),
+    hostConnected: Boolean(body?.hostConnected),
+    hostId: body?.hostId || existingPolicy?.hostId || '',
+    hostName: body?.hostName || existingPolicy?.hostName || '',
+    updatedAt: body?.updatedAt || existingPolicy?.updatedAt || '',
+  };
 }
 
 async function ensureRelayFunction({ functionName, functionId, log = console.log, ...cliOpts }) {
@@ -673,6 +792,21 @@ export async function bindTianaRemoteWeb(options = {}) {
     throw new Error(`Invalid Tiana Web app ID: ${webId || '(empty)'}`);
   }
 
+  // Local preflight: refuse initializing/binding if another live local dsh-remote host process is active
+  if (!options.skipLocalPreflight && !options.forceRebind) {
+    const localHost = detectLocalRunningHost({
+      statePath,
+      runtimePath: options.runtimePath,
+      currentPid: options.currentPid ?? process.pid,
+      isAlive: options.isPidAlive,
+      readRuntime: options.readRuntime,
+      readBridgeOwner: options.readBridgeOwner,
+    });
+    if (localHost.running) {
+      throw formatLocalHostConflictError(localHost);
+    }
+  }
+
   let status = await getTianaStatus(cliOpts);
   if (options.spaceId && status.user.tenant_id !== options.spaceId) {
     log(`[dsh-remote] Switching Tiana space to ${options.spaceId}...`);
@@ -772,7 +906,7 @@ export async function bindTianaRemoteWeb(options = {}) {
   let mintedNewToken = tokenInfo.token !== seedToken?.token;
 
   // Step B: Verify target Function /healthz confirms a valid DSH Remote Relay
-  await verifyRelayHealth(fnUrl, tokenInfo.token, options);
+  let healthResult = await verifyRelayHealth(fnUrl, tokenInfo.token, options);
 
   // Serialize the cloud-read + conflict-check + pendingBind checkpoint + policy write + state commit
   // across local processes so concurrent binds can never produce a local/cloud hostDigest mismatch.
@@ -812,7 +946,7 @@ export async function bindTianaRemoteWeb(options = {}) {
         ...cliOpts,
       });
       mintedNewToken = tokenInfo.token !== preLockToken?.token;
-      await verifyRelayHealth(fnUrl, tokenInfo.token, options);
+      healthResult = await verifyRelayHealth(fnUrl, tokenInfo.token, options);
     }
 
     const hostId = options.hostId || prevState.host?.hostId || identity.hostId;
@@ -827,6 +961,58 @@ export async function bindTianaRemoteWeb(options = {}) {
       ? prevState.pendingBind
       : null;
 
+    // Cloud online preflight: block binding/re-init if ANY active host is currently connected to the Relay
+    let hostStatus = null;
+    if (typeof options.probeRelayHostStatus === 'function') {
+      hostStatus = await options.probeRelayHostStatus(fnUrl, tokenInfo.token, {
+        existingPolicy,
+        registrationKey: prevState.host?.registrationKey || pendingBind?.registrationKey || '',
+        hostId: existingPolicy?.hostId || hostId,
+        webId,
+      });
+    } else if (typeof options.probeRelayHealth === 'function') {
+      if (typeof healthResult?.hostConnected === 'boolean') {
+        hostStatus = {
+          supported: true,
+          ok: true,
+          paired: Boolean(healthResult.paired),
+          hostConnected: healthResult.hostConnected,
+          hostId: healthResult.hostId || existingPolicy?.hostId || '',
+          hostName: healthResult.hostName || existingPolicy?.hostName || '',
+          updatedAt: healthResult.updatedAt || existingPolicy?.updatedAt || '',
+        };
+      }
+    } else if (healthResult?.paired || existingPolicy) {
+      try {
+        hostStatus = await probeRelayHostStatus(fnUrl, tokenInfo.token, {
+          existingPolicy,
+          registrationKey: prevState.host?.registrationKey || pendingBind?.registrationKey || '',
+          hostId: existingPolicy?.hostId || hostId,
+          webId,
+          fetchFn: options.fetchFn,
+          allowInsecureLoopback: options.allowInsecureLoopback,
+          statusTimeoutMs: options.statusTimeoutMs,
+        });
+      } catch (err) {
+        log(`[dsh-remote] Warning: /host-status preflight check failed (${err instanceof Error ? err.message : String(err)}); continuing with policy verification.`);
+      }
+    }
+
+    if (hostStatus?.hostConnected === true) {
+      const activeHostId = hostStatus.hostId || existingPolicy?.hostId || hostId;
+      const activeHostName = hostStatus.hostName || existingPolicy?.hostName || activeHostId;
+      if (!options.forceRebind) {
+        throw buildActiveHostOnlineError({
+          webId,
+          functionId: fnId,
+          hostId: activeHostId,
+          hostName: activeHostName,
+          updatedAt: hostStatus.updatedAt || existingPolicy?.updatedAt || '',
+        });
+      }
+      log(`[dsh-remote] --force-rebind enabled: forcing takeover from active host "${activeHostName} (${activeHostId})" and rotating registrationKey...`);
+    }
+
     const localPubKey = prevState.host?.publicKey || prevState.hostSigningKeyPair?.publicKey || '';
     const matchesPrevHost = !hasBindingIdentityConflict(existingPolicy, {
       hostId,
@@ -840,9 +1026,9 @@ export async function bindTianaRemoteWeb(options = {}) {
     });
     const conflict = !matchesPrevHost && !matchesPendingBind;
 
-    let rotatedRegistration = false;
+    let rotatedRegistration = Boolean(options.forceRebind);
     if (conflict) {
-      if (!options.rebind) {
+      if (!options.rebind && !options.forceRebind) {
         if (typeof options.confirmRebind === 'function') {
           const ok = await options.confirmRebind(existingPolicy, { hostId, hostName });
           if (!ok) throw new Error('Rebind cancelled by user.');
@@ -856,12 +1042,17 @@ export async function bindTianaRemoteWeb(options = {}) {
     }
 
     const reusePending = Boolean(pendingBind) && (matchesPendingBind || !prevState.host?.registrationKey);
-    const registrationKey = rotatedRegistration
-      ? generateE2eeSecret()
-      : ((reusePending ? pendingBind?.registrationKey : prevState.host?.registrationKey) ||
-          pendingBind?.registrationKey ||
-          prevState.host?.registrationKey ||
-          generateE2eeSecret());
+    let registrationKey;
+    if (rotatedRegistration) {
+      do {
+        registrationKey = generateE2eeSecret();
+      } while (registrationKey === prevState.host?.registrationKey || registrationKey === pendingBind?.registrationKey);
+    } else {
+      registrationKey = ((reusePending ? pendingBind?.registrationKey : prevState.host?.registrationKey) ||
+        pendingBind?.registrationKey ||
+        prevState.host?.registrationKey ||
+        generateE2eeSecret());
+    }
     const baseE2eeSource = prevState.e2ee?.secret
       ? prevState
       : (pendingBind?.e2ee?.secret ? { e2ee: pendingBind.e2ee } : prevState);
@@ -995,6 +1186,20 @@ export async function provisionTianaRemote(options = {}) {
   const webName = options.webName || DEFAULT_WEB_NAME;
   const statePath = options.statePath;
   const cliOpts = options.tianaBin ? { bin: options.tianaBin } : {};
+
+  if (!options.skipLocalPreflight && !options.forceRebind) {
+    const localHost = detectLocalRunningHost({
+      statePath,
+      runtimePath: options.runtimePath,
+      currentPid: options.currentPid ?? process.pid,
+      isAlive: options.isPidAlive,
+      readRuntime: options.readRuntime,
+      readBridgeOwner: options.readBridgeOwner,
+    });
+    if (localHost.running) {
+      throw formatLocalHostConflictError(localHost);
+    }
+  }
 
   let status = await getTianaStatus(cliOpts);
   const resolvedStatePath = resolveStatePath(statePath);
@@ -1194,17 +1399,72 @@ export async function provisionTianaRemote(options = {}) {
       webUrl = freshAuth.webUrl;
       webEndpoint = webUrl.href;
 
+      const existingParams = await getFunctionParameters(fnInstance.id, cliOpts);
+      const existingPolicy = parsePolicyFromParameters(existingParams);
+
+      // Cloud online preflight before mutating DSH_REMOTE_POLICY
+      let setupHostStatus = null;
+      if (typeof options.probeRelayHostStatus === 'function') {
+        setupHostStatus = await options.probeRelayHostStatus(fnUrl, tokenInfo.token, {
+          existingPolicy,
+          registrationKey,
+          hostId: existingPolicy?.hostId || hostId,
+          webId,
+        });
+      } else if (existingPolicy) {
+        let isInvalidTestHost = false;
+        try {
+          isInvalidTestHost = new URL(fnUrl).hostname.endsWith('.invalid');
+        } catch {
+          isInvalidTestHost = true;
+        }
+        if (!isInvalidTestHost) {
+          try {
+            setupHostStatus = await probeRelayHostStatus(fnUrl, tokenInfo.token, {
+              existingPolicy,
+              registrationKey,
+              hostId: existingPolicy.hostId || hostId,
+              webId,
+              fetchFn: options.fetchFn,
+              allowInsecureLoopback: options.allowInsecureLoopback,
+              statusTimeoutMs: options.statusTimeoutMs,
+            });
+          } catch (err) {
+            log(`[dsh-remote] Warning: /host-status preflight check failed (${err instanceof Error ? err.message : String(err)}); continuing.`);
+          }
+        }
+      }
+
+      if (setupHostStatus?.hostConnected === true && !options.forceRebind) {
+        await restoreInitialState();
+        throw buildActiveHostOnlineError({
+          webId,
+          functionId: fnInstance.id,
+          hostId: setupHostStatus.hostId || existingPolicy?.hostId || hostId,
+          hostName: setupHostStatus.hostName || existingPolicy?.hostName || hostId,
+          updatedAt: setupHostStatus.updatedAt || existingPolicy?.updatedAt || '',
+        });
+      }
+
+      let effectiveRegistrationKey = registrationKey;
+      if (options.forceRebind) {
+        do {
+          effectiveRegistrationKey = generateE2eeSecret();
+        } while (effectiveRegistrationKey === registrationKey || effectiveRegistrationKey === prevState.host?.registrationKey);
+        log('[dsh-remote] --force-rebind enabled: rotated registrationKey to invalidate any prior host credentials.');
+      }
+
       const policy = buildRemotePolicy({
         hostId,
         hostName,
-        registrationKey,
+        registrationKey: effectiveRegistrationKey,
         ownerUserId: status.user.user_id,
         ownerTenantId: status.user.tenant_id,
         webId,
         origin: webUrl.origin,
       });
 
-      await updateRemotePolicy(fnInstance.id, policy, { log, ...cliOpts });
+      await updateRemotePolicy(fnInstance.id, policy, { existingParams, log, ...cliOpts });
       await ensureWebFunctionBinding(webId, fnInstance.id, {
         initialBinding: freshAuth.binding,
         requireManage: freshAuth.requiresManageProof,
@@ -1250,7 +1510,7 @@ export async function provisionTianaRemote(options = {}) {
           host: {
             hostId,
             hostName,
-            registrationKey,
+            registrationKey: effectiveRegistrationKey,
           },
           e2ee: committedE2ee,
           function: {

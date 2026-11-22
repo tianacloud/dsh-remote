@@ -1,14 +1,19 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { buildWebDist } from './scripts/build-web-dist.mjs';
 import { checkNodeVersion, runConnect } from './src/connect.js';
 import { HostBridge } from './src/host-bridge.js';
 import {
+  claimBridgeOwnership,
   defaultStatePath,
+  detectLocalRunningHost,
   ensureE2eeConfig,
+  formatLocalHostConflictError,
   formatPairingKey,
   loadRemoteState,
   migrateRemoteState,
+  releaseBridgeOwnership,
   saveRemoteState,
   withStateLock,
 } from './src/state.js';
@@ -51,7 +56,8 @@ Usage:
     --profile <name>              DSH profile name (default: web)
     --port <port>                 Local DSH port (default: 3080)
     --host-name <name>            Override display name
-    --rebind                      Rebind without prompt if app is bound to another machine
+    --rebind                      Rebind without prompt if app is bound to another offline machine
+    --force-rebind                Force takeover even if an active host is online (rotates registrationKey)
     --no-start                    Do not auto-start local DSH
     --no-open                     Do not auto-open browser
     --no-clipboard                Do not copy pairing key to clipboard
@@ -63,6 +69,7 @@ Usage:
     --host-name <name>            Override display name
     --function-name <name>        Relay Function name (default: dsh-remote-relay)
     --web-name <name>             Web App name (default: DSH Remote)
+    --force-rebind                Force takeover even if an active host is online (rotates registrationKey)
     --force-publish               Force rebuild & publish Relay Function
     --rotate-token                Mint a fresh Function access token
     --rotate-e2ee-key             Rotate the local E2EE pairing key
@@ -92,6 +99,7 @@ async function cmdConnect(flags) {
     port: typeof flags.port === 'string' ? flags.port : undefined,
     hostName: typeof flags['host-name'] === 'string' ? flags['host-name'] : undefined,
     rebind: Boolean(flags.rebind),
+    forceRebind: Boolean(flags['force-rebind']),
     noStart: Boolean(flags['no-start']),
     noOpen: Boolean(flags['no-open']),
     noClipboard: Boolean(flags['no-clipboard']),
@@ -106,6 +114,7 @@ async function cmdSetup(flags) {
     hostName: typeof flags['host-name'] === 'string' ? flags['host-name'] : undefined,
     functionName: typeof flags['function-name'] === 'string' ? flags['function-name'] : undefined,
     webName: typeof flags['web-name'] === 'string' ? flags['web-name'] : undefined,
+    forceRebind: Boolean(flags['force-rebind']),
     forcePublish: Boolean(flags['force-publish']),
     rotateToken: Boolean(flags['rotate-token']),
     rotateE2eeKey: Boolean(flags['rotate-e2ee-key']),
@@ -270,7 +279,27 @@ async function cmdStart(flags) {
   const { hostId, registrationKey } = state.host;
   const launchToken = process.env.DSH_LAUNCH_TOKEN || '';
   const localOrigin = `http://127.0.0.1:${port}`;
+  const statePath = defaultStatePath();
+  const localHost = detectLocalRunningHost({ statePath });
+  if (localHost.running) {
+    throw formatLocalHostConflictError(localHost);
+  }
+  const instanceId = randomUUID();
+  const claim = await claimBridgeOwnership({
+    instanceId,
+    hostId,
+    origin: localOrigin,
+  }, statePath);
+  if (!claim.acquired) {
+    throw formatLocalHostConflictError({
+      pid: claim.owner?.pid,
+      hostId: claim.owner?.hostId || hostId,
+      origin: claim.owner?.advertisedOrigin || claim.owner?.origin || '',
+      source: 'bridge-owner.json',
+    });
+  }
   const bridge = new HostBridge({
+    instanceId,
     relayUrl: state.function.url,
     relayToken: state.function.token,
     e2eeSecret: state.e2ee.secret,
@@ -291,12 +320,17 @@ async function cmdStart(flags) {
 
   const stop = () => {
     bridge.stop();
-    process.exit(0);
+    void releaseBridgeOwnership(instanceId, statePath).finally(() => process.exit(0));
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 
-  await bridge.start();
+  try {
+    await bridge.start();
+  } catch (err) {
+    await releaseBridgeOwnership(instanceId, statePath);
+    throw err;
+  }
   console.log(`[dsh-remote] E2EE active (${state.e2ee.algorithm}, key ${state.e2ee.fingerprint})`);
   console.log(`[dsh-remote] Bridging ${localOrigin} -> ${state.web.endpoint}`);
 }
@@ -316,6 +350,13 @@ async function main() {
   switch (command) {
     case 'connect':
       await cmdConnect(flags);
+      break;
+    case 'init':
+      if (flags.web || flags.app) {
+        await cmdConnect(flags);
+      } else {
+        await cmdSetup(flags);
+      }
       break;
     case 'setup':
       await cmdSetup(flags);
