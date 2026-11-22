@@ -164,11 +164,11 @@ test('v0.2.7: state.js bridge ownership lock, runtime.json live-PID protection, 
     // writeRuntimeInfo protects another live PID's runtime.json unless overwriteLiveOther is true
     const otherLivePid = process.ppid && process.ppid !== process.pid ? process.ppid : null;
     if (otherLivePid) {
-      writeFileSync(runtimePath, JSON.stringify({
+      saveRemoteState({
         pid: otherLivePid,
         origin: 'https://100.64.0.10:3080',
         advertisedOrigin: 'https://workstation.example.test:3080',
-      }));
+      }, runtimePath);
       const res = writeRuntimeInfo({ pid: process.pid, origin: 'http://127.0.0.1:3080' }, runtimePath);
       assert.equal(res, false);
       assert.equal(readRuntimeInfo(runtimePath).pid, otherLivePid);
