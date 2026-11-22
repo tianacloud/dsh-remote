@@ -87,18 +87,38 @@ const RESERVED_HTTP_PREFIX_SEGMENTS = new Set([
   '__dsh_remote__',
   '_tiana',
   'connect',
-  'plugins',
   'oauth',
   'inspector',
   'open-in-app',
 ]);
 
+function isBlockedPluginsRoute(segments) {
+  // segments[0] is 'plugins' (case-insensitive)
+  const trimmed = segments.length > 1 && segments[segments.length - 1] === ''
+    ? segments.slice(0, -1)
+    : segments;
+  if (trimmed.length < 2) return true; // /plugins or /plugins/
+  const first = trimmed[1].toLowerCase();
+  if (!first || first === 'events' || first.startsWith('??')) return true;
+  const subIndex = first.startsWith('@') ? 3 : 2;
+  if (trimmed.length <= subIndex) return true; // /plugins/<pkg> or /plugins/@scope/<pkg>
+  const subFirst = trimmed[subIndex].toLowerCase();
+  if (!subFirst || subFirst === 'assets') return true;
+  // Block client.js, client.<hash>.js, and sourcemap variants
+  if (trimmed.length === subIndex + 1 && /^client(?:\.[a-z0-9._-]+)?\.js(?:\.map)?$/iu.test(subFirst)) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Validate and classify a tunneled HTTP target.
  * - Blocks malformed/traversal paths and reserved DSH core or shell routes (returns null -> 404).
+ * - Blocks `/plugins` static bundles, chunks, assets, and `/plugins/events` HMR, while forwarding
+ *   third-party plugin API routes such as `/plugins/<pkg>/<api>` and `/plugins/@scope/<pkg>/<api>`.
  * - Blocks `/api/tiana-remote/admin` and `/api/tiana-remote/admin/*` (returns `{ kind: 'forbidden' }` -> 403).
- * - Allows `/api/*` (including `/api/tiana-remote/status` & `/api/tiana-remote/public-status`)
- *   and third-party plugin HTTP routes.
+ * - Allows `/api/*` (including `/api/tiana-remote/status`, `/api/tiana-remote/public-status`, and
+ *   `/api/tiana-remote/plugin-access`) and third-party plugin HTTP routes.
  */
 export function classifyHttpRoute(pathAndQuery) {
   if (typeof pathAndQuery !== 'string' || !pathAndQuery.startsWith('/') ||
@@ -141,7 +161,11 @@ export function classifyHttpRoute(pathAndQuery) {
   if (RESERVED_HTTP_EXACT_PATHS.has(trimmedLower)) {
     return null;
   }
-  if (RESERVED_HTTP_PREFIX_SEGMENTS.has(segments[0].toLowerCase())) {
+  const firstSegment = segments[0].toLowerCase();
+  if (RESERVED_HTTP_PREFIX_SEGMENTS.has(firstSegment)) {
+    return null;
+  }
+  if (firstSegment === 'plugins' && isBlockedPluginsRoute(segments)) {
     return null;
   }
   if (/^\/api\/tiana-remote\/admin(?:\/|$)/iu.test(trimmedLower)) {
@@ -232,6 +256,12 @@ export class HostBridge {
     this.stopped = false;
     this.reconnectAttempts = 0;
     this.reconnectTimer = null;
+    this.stableTimer = null;
+    this.stableConnectionMs = options.stableConnectionMs ?? 15_000;
+    this.conflictMinBackoffMs = options.conflictMinBackoffMs ?? 5_000;
+    this.hostConflict = false;
+    this.lastCloseCode = null;
+    this.lastCloseReason = '';
     this.connectedPromise = null;
     this.browserCookie = null;
     this.browserCookieGeneration = 0;
@@ -301,6 +331,9 @@ export class HostBridge {
     return {
       running: !this.stopped,
       relayConnected: this.registered,
+      hostConflict: this.hostConflict,
+      lastCloseCode: this.lastCloseCode,
+      lastCloseReason: this.lastCloseReason,
       hostId: this.hostId,
       hostName: this.hostName,
       p2pEnabled: this.p2pEnabled,
@@ -337,7 +370,7 @@ export class HostBridge {
     return { kicked };
   }
 
-  updateSettings({ hostName, p2pEnabled, stunUrls, allowedWebPlugins, relayToken } = {}) {
+  updateSettings({ hostName, p2pEnabled, stunUrls, pluginPolicy, allowedWebPlugins, relayToken } = {}) {
     if (typeof hostName === 'string' && hostName.trim()) {
       this.hostName = hostName.trim().slice(0, 128);
     }
@@ -347,7 +380,9 @@ export class HostBridge {
     if (stunUrls !== undefined || p2pEnabled !== undefined) {
       this.iceServers = this.p2pEnabled ? normalizeStun(stunUrls ?? this.iceServers) : [];
     }
-    if (allowedWebPlugins !== undefined) {
+    if (pluginPolicy !== undefined) {
+      this.frontend.setPluginPolicy(pluginPolicy);
+    } else if (allowedWebPlugins !== undefined) {
       this.frontend.setAllowlist(allowedWebPlugins);
     }
     if (typeof relayToken === 'string' && relayToken) {
@@ -381,6 +416,10 @@ export class HostBridge {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.stableTimer) {
+      clearTimeout(this.stableTimer);
+      this.stableTimer = null;
+    }
     this.cleanupActiveStreams();
     if (this.ws) {
       try {
@@ -402,11 +441,18 @@ export class HostBridge {
     this.relayLegs.clear();
   }
 
-  scheduleReconnect() {
+  scheduleReconnect({ replaced = false, code = 0, reason = '' } = {}) {
     if (this.stopped || this.reconnectTimer) return;
-    const delayMs = Math.min(30_000, 1000 * Math.pow(2, Math.min(this.reconnectAttempts, 5)));
+    let delayMs = Math.min(30_000, 1000 * Math.pow(2, Math.min(this.reconnectAttempts, 5)));
+    if (replaced) {
+      delayMs = Math.max(this.conflictMinBackoffMs, delayMs);
+    }
     this.reconnectAttempts += 1;
-    this.log(`[dsh-remote] Relay disconnected; reconnecting in ${Math.round(delayMs / 1000)}s...`);
+    const detail = reason ? ` (${code}: ${reason})` : code ? ` (${code})` : '';
+    this.log(`[dsh-remote] Relay disconnected${detail}; reconnecting in ${Math.round(delayMs / 1000)}s...`);
+    if (replaced) {
+      this.log(`[dsh-remote] Another DSH host process appears to be connected with host_id "${this.hostId}". Stop duplicate DSH instances to restore a stable connection.`);
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.stopped) {
@@ -452,7 +498,15 @@ export class HostBridge {
           }
           clearTimeout(registrationTimeout);
           this.registered = true;
-          this.reconnectAttempts = 0;
+          clearTimeout(this.stableTimer);
+          this.stableTimer = setTimeout(() => {
+            if (this.ws === ws && this.registered) {
+              this.reconnectAttempts = 0;
+              this.hostConflict = false;
+            }
+            this.stableTimer = null;
+          }, this.stableConnectionMs);
+          this.stableTimer.unref?.();
           this.log(`[dsh-remote] Registered host "${this.hostId}"`);
           settled = true;
           resolve();
@@ -463,14 +517,24 @@ export class HostBridge {
         });
       });
 
-      ws.addEventListener('close', () => {
+      ws.addEventListener('close', (event) => {
         clearTimeout(registrationTimeout);
         if (this.ws === ws) {
+          clearTimeout(this.stableTimer);
+          this.stableTimer = null;
           this.registered = false;
           this.ws = null;
+          const code = Number(event?.code || 0);
+          const reason = typeof event?.reason === 'string' ? event.reason : '';
+          this.lastCloseCode = code || null;
+          this.lastCloseReason = reason;
+          const replaced = /replaced by newer host connection/iu.test(reason);
+          if (replaced) {
+            this.hostConflict = true;
+          }
           for (const [id] of this.relayLegs) this.detachRelay(id);
           if (!this.stopped) {
-            this.scheduleReconnect();
+            this.scheduleReconnect({ replaced, code, reason });
           }
         }
         if (!settled) {

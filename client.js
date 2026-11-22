@@ -438,11 +438,28 @@
       sessionsEmpty: '当前没有活跃的远端浏览器会话',
       disconnect: '断开',
       disconnectAll: '断开全部',
-      settingsTitle: '主机、换绑与网络插件策略',
+      settingsTitle: '主机、换绑与网络设置',
       hostName: '主机显示名',
       p2pToggle: '启用 WebRTC P2P 直连优先',
       stunUrls: 'STUN 服务器（逗号分隔）',
-      allowedPlugins: '远端放行的第三方 Web 插件（未勾选时仅放行内置核心与 Tiana Remote）',
+      allowedPlugins: '远端放行的第三方 Web 插件',
+      pluginPolicyTitle: '远端插件访问策略',
+      pluginModeAllowAll: '默认放行所有（黑名单模式）',
+      pluginModeDenyAll: '默认不放行（白名单模式）',
+      pluginBlacklistHint: '默认放行所有第三方插件；勾选下方插件加入黑名单即可在远端屏蔽。',
+      pluginWhitelistHint: '默认屏蔽所有第三方插件；仅勾选下方插件加入白名单才会在远端放行。',
+      pluginCoreNote: '内置核心模块（@deepseek-ai/dsh-*）与 @tianacloud/dsh-remote 始终放行，不受黑白名单限制。',
+      pluginEnvOverrideNote: '当前主机设置了 DSH_REMOTE_WEB_PLUGINS 环境变量，将优先于下方保存的策略生效。',
+      pluginEmpty: '当前未检测到已安装的第三方 Web 插件',
+      pluginStateAllowed: '放行',
+      pluginStateBlocked: '已屏蔽',
+      savePluginPolicy: '保存插件策略',
+      pluginPolicySavedLocal: '插件策略已保存，远端页面刷新后生效。',
+      pluginPolicySavedRemote: '插件策略已保存。刷新远程工作台即可加载最新插件列表。',
+      reloadWorkbenchBtn: '立即刷新远程工作台',
+      conflictBannerTitle: '检测到重复的 DSH 主机进程冲突',
+      conflictBannerOwnedByOther: '另一台本地 DSH 进程正在占用 Relay 连接，本进程已暂停重复建连以避免断线循环。请关闭多余的 DSH 实例。',
+      conflictBannerRelayKicked: '当前 Relay 连接被同 host_id 的另一个主机实例顶替，已启用退避重连。请检查并停止本机多余的 DSH 进程。',
       saveSettings: '保存设置',
       resetDraft: '放弃未保存更改',
       saving: '保存中…',
@@ -459,7 +476,7 @@
       remoteRelay: 'Tiana Relay 加密中继',
       remoteReconnecting: '正在重连…',
       remoteRtt: '往返延迟 (RTT)',
-      remoteSecurityNote: '安全边界说明：当前处于远端隧道受限视图。配对密钥查看/轮换与主机管理接口仅限本机回环访问，远端隧道严格返回 403 拦截。',
+      remoteSecurityNote: '安全边界说明：当前处于远端隧道受限视图。配对密钥查看/轮换与主机管理接口仅限本机访问，远端隧道严格返回 403 拦截；你可在下方管理远端插件黑白名单。',
       clearCacheBtn: '刷新前端模块缓存',
       lockForgetBtn: '锁定并清除此设备密钥',
       onboardTitle: '绑定或新建云端 DSH Remote 应用',
@@ -516,11 +533,28 @@
       sessionsEmpty: 'No active remote sessions',
       disconnect: 'Disconnect',
       disconnectAll: 'Disconnect All',
-      settingsTitle: 'Host, Rebind & Network Policy',
+      settingsTitle: 'Host, Rebind & Network Settings',
       hostName: 'Host Display Name',
       p2pToggle: 'Prefer WebRTC P2P Direct Connection',
       stunUrls: 'STUN Servers (comma-separated)',
-      allowedPlugins: 'Allowed Third-Party Web Plugins (unchecked = core + Tiana Remote only)',
+      allowedPlugins: 'Remote Third-Party Web Plugins',
+      pluginPolicyTitle: 'Remote Plugin Access Policy',
+      pluginModeAllowAll: 'Allow All by Default (Blacklist)',
+      pluginModeDenyAll: 'Deny All by Default (Whitelist)',
+      pluginBlacklistHint: 'All third-party plugins are allowed by default; check plugins below to block them remotely.',
+      pluginWhitelistHint: 'All third-party plugins are blocked by default; check plugins below to allow them remotely.',
+      pluginCoreNote: 'Built-in core modules (@deepseek-ai/dsh-*) and @tianacloud/dsh-remote are always allowed.',
+      pluginEnvOverrideNote: 'DSH_REMOTE_WEB_PLUGINS environment variable is currently overriding saved policy on this host.',
+      pluginEmpty: 'No installed third-party Web plugins detected',
+      pluginStateAllowed: 'Allowed',
+      pluginStateBlocked: 'Blocked',
+      savePluginPolicy: 'Save Plugin Policy',
+      pluginPolicySavedLocal: 'Plugin policy saved. Refresh open remote tabs to apply.',
+      pluginPolicySavedRemote: 'Plugin policy saved. Reload the remote workbench to apply changes.',
+      reloadWorkbenchBtn: 'Reload Remote Workbench',
+      conflictBannerTitle: 'Duplicate DSH Host Process Conflict Detected',
+      conflictBannerOwnedByOther: 'Another live DSH process currently owns the Relay bridge. This instance paused duplicate connection attempts to prevent reconnect loops. Stop extra DSH processes.',
+      conflictBannerRelayKicked: 'The Relay connection was replaced by another host using the same host_id. Backoff is active; stop duplicate DSH instances to stabilize.',
       saveSettings: 'Save Settings',
       resetDraft: 'Discard Unsaved Edits',
       saving: 'Saving…',
@@ -537,7 +571,7 @@
       remoteRelay: 'Tiana Encrypted Relay',
       remoteReconnecting: 'Reconnecting…',
       remoteRtt: 'Round-Trip Latency (RTT)',
-      remoteSecurityNote: 'Security Isolation: You are viewing the restricted remote session panel. Pairing keys and host admin APIs are strictly blocked (403) over the remote tunnel.',
+      remoteSecurityNote: 'Security Isolation: Pairing keys and host admin APIs are strictly blocked (403) over the remote tunnel. You can still configure remote plugin blacklist/whitelist policy below.',
       clearCacheBtn: 'Refresh Frontend Module Cache',
       lockForgetBtn: 'Lock & Forget Key on This Device',
       onboardTitle: 'Bind or Create a Tiana DSH Remote App',
@@ -595,6 +629,28 @@
         font-size: 12px; font-weight: 500;
         background: var(--dsw-alias-bg-layer-3, rgba(15, 23, 42, 0.6));
         border: 1px solid var(--dsw-alias-border-l1, rgba(148, 163, 184, 0.25));
+      }
+      .dshr-plugin-pill {
+        display: inline-flex; align-items: center; gap: 8px; padding: 6px 11px; border-radius: 10px;
+        font-size: 12px; font-weight: 500; cursor: pointer;
+        background: var(--dsw-alias-bg-layer-1, rgba(15, 23, 42, 0.5));
+        border: 1px solid var(--dsw-alias-border-l1, rgba(148, 163, 184, 0.25));
+      }
+      .dshr-plugin-pill.is-blocked {
+        border-color: rgba(248, 113, 113, 0.45);
+        background: rgba(220, 38, 38, 0.1);
+      }
+      .dshr-plugin-pill.is-allowed {
+        border-color: rgba(34, 197, 94, 0.38);
+      }
+      .dshr-state-tag {
+        font-size: 11px; padding: 1px 6px; border-radius: 999px;
+      }
+      .dshr-state-tag.is-allowed {
+        background: rgba(34, 197, 94, 0.18); color: #4ade80;
+      }
+      .dshr-state-tag.is-blocked {
+        background: rgba(239, 68, 68, 0.18); color: #f87171;
       }
       .dshr-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
       .dshr-dot.is-online { background: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25); }
@@ -655,6 +711,10 @@
       .dshr-notice {
         padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;
         background: rgba(59, 130, 246, 0.12); border: 1px solid rgba(96, 165, 250, 0.35);
+      }
+      .dshr-warn {
+        padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;
+        background: rgba(245, 158, 11, 0.14); border: 1px solid rgba(251, 191, 36, 0.45);
       }
       .dshr-err {
         padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.45;
@@ -779,9 +839,18 @@
       const [hostNameDraft, setHostNameDraft] = useState('');
       const [p2pDraft, setP2pDraft] = useState(true);
       const [stunDraft, setStunDraft] = useState('');
-      const [pluginsDraft, setPluginsDraft] = useState([]);
       const settingsDirtyRef = useRef(false);
       const [settingsDirty, setSettingsDirty] = useState(false);
+
+      // Plugin access policy state (shared by both Local and Remote views)
+      const [pluginAccess, setPluginAccess] = useState(null);
+      const [pluginModeDraft, setPluginModeDraft] = useState('allow_all');
+      const [blockedPluginsDraft, setBlockedPluginsDraft] = useState([]);
+      const [allowedPluginsDraft, setAllowedPluginsDraft] = useState([]);
+      const pluginDirtyRef = useRef(false);
+      const [pluginDirty, setPluginDirty] = useState(false);
+      const [pluginReloadNeeded, setPluginReloadNeeded] = useState(false);
+      const [pluginError, setPluginError] = useState('');
 
       // Provision / Onboarding / Rebind state
       const [onboardTab, setOnboardTab] = useState('bind');
@@ -800,7 +869,13 @@
         setHostNameDraft(data.host?.hostName || '');
         setP2pDraft(data.network?.p2pEnabled !== false);
         setStunDraft((data.network?.stunUrls || []).join(','));
-        setPluginsDraft(Array.isArray(data.allowedWebPlugins) ? data.allowedWebPlugins : []);
+      }, []);
+
+      const hydratePluginDrafts = useCallback((pa) => {
+        if (!pa || typeof pa !== 'object') return;
+        setPluginModeDraft(pa.mode === 'deny_all' ? 'deny_all' : 'allow_all');
+        setBlockedPluginsDraft(Array.isArray(pa.blockedWebPlugins) ? pa.blockedWebPlugins : []);
+        setAllowedPluginsDraft(Array.isArray(pa.allowedWebPlugins) ? pa.allowedWebPlugins : []);
       }, []);
 
       const markDirty = () => {
@@ -808,11 +883,29 @@
         setSettingsDirty(true);
       };
 
+      const markPluginDirty = () => {
+        pluginDirtyRef.current = true;
+        setPluginDirty(true);
+        setPluginError('');
+      };
+
       const fetchState = useCallback(async () => {
         try {
           if (isRemote) {
-            const resp = await fetch('/api/tiana-remote/public-status', { cache: 'no-store' });
-            if (resp.ok) setPublicStatus(await resp.json());
+            const [statusRes, policyRes] = await Promise.allSettled([
+              fetch('/api/tiana-remote/public-status', { cache: 'no-store' }),
+              fetch('/api/tiana-remote/plugin-access', { cache: 'no-store' }),
+            ]);
+            if (statusRes.status === 'fulfilled' && statusRes.value.ok) {
+              setPublicStatus(await statusRes.value.json());
+            }
+            if (policyRes.status === 'fulfilled' && policyRes.value.ok) {
+              const pa = await policyRes.value.json();
+              setPluginAccess(pa);
+              if (!pluginDirtyRef.current) {
+                hydratePluginDrafts(pa);
+              }
+            }
             const snap = globalThis.__DSH_REMOTE_SHELL__?.getStatusSnapshot?.();
             if (snap) setShellSnap(snap);
           } else {
@@ -824,6 +917,19 @@
               // NEVER overwrite user's in-progress form edits during background polling
               if (!settingsDirtyRef.current) {
                 hydrateDraftsFromOverview(data);
+              }
+              const pa = data.pluginAccess || {
+                mode: data.security?.pluginAccessMode === 'deny_all' ? 'deny_all' : 'allow_all',
+                blockedWebPlugins: Array.isArray(data.security?.blockedWebPlugins) ? data.security.blockedWebPlugins : [],
+                allowedWebPlugins: Array.isArray(data.security?.allowedWebPlugins)
+                  ? data.security.allowedWebPlugins
+                  : (Array.isArray(data.allowedWebPlugins) ? data.allowedWebPlugins : []),
+                installedWebPlugins: Array.isArray(data.installedWebPlugins) ? data.installedWebPlugins : [],
+                envOverride: Boolean(data.envOverrides?.allowedWebPlugins),
+              };
+              setPluginAccess(pa);
+              if (!pluginDirtyRef.current) {
+                hydratePluginDrafts(pa);
               }
             } else {
               let errMessage = '';
@@ -857,7 +963,7 @@
             setAdminLoading(false);
           }
         }
-      }, [isRemote, hydrateDraftsFromOverview]);
+      }, [isRemote, hydrateDraftsFromOverview, hydratePluginDrafts]);
 
       const pollProvisionStatus = useCallback(async () => {
         if (isRemote) return;
@@ -904,6 +1010,171 @@
         }
       };
 
+      const handleSavePluginPolicy = async (ev) => {
+        ev?.preventDefault?.();
+        setBusy('plugin-policy');
+        setPluginError('');
+        try {
+          const resp = await fetch('/api/tiana-remote/plugin-access', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              mode: pluginModeDraft,
+              blockedWebPlugins: blockedPluginsDraft,
+              allowedWebPlugins: allowedPluginsDraft,
+            }),
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) {
+            setPluginError(data.error || `HTTP ${resp.status}`);
+            return;
+          }
+          pluginDirtyRef.current = false;
+          setPluginDirty(false);
+          setPluginAccess(data);
+          hydratePluginDrafts(data);
+          if (isRemote) {
+            setPluginReloadNeeded(true);
+            setToast(t('pluginPolicySavedRemote'));
+          } else {
+            setToast(t('pluginPolicySavedLocal'));
+            await fetchState();
+          }
+        } catch (err) {
+          setPluginError(err instanceof Error ? err.message : String(err || 'Network error'));
+        } finally {
+          setBusy('');
+        }
+      };
+
+      const handleDiscardPluginDrafts = () => {
+        pluginDirtyRef.current = false;
+        setPluginDirty(false);
+        setPluginError('');
+        if (pluginAccess) {
+          hydratePluginDrafts(pluginAccess);
+        }
+      };
+
+      const renderPluginAccessCard = () => {
+        const installedList = Array.isArray(pluginAccess?.installedWebPlugins)
+          ? pluginAccess.installedWebPlugins
+          : [];
+        const allPlugins = [...new Set([
+          ...installedList,
+          ...blockedPluginsDraft,
+          ...allowedPluginsDraft,
+        ])];
+        const isAllowAllMode = pluginModeDraft !== 'deny_all';
+
+        return h('div', { className: 'dshr-card', id: 'dshr-plugin-access-card' },
+          h('form', { style: { display: 'grid', gap: 14 }, onSubmit: handleSavePluginPolicy },
+            h('div', { className: 'dshr-card-head' },
+              h('h3', { className: 'dshr-card-title' }, t('pluginPolicyTitle')),
+              h('span', { className: 'dshr-badge', id: 'dshr-plugin-mode-badge' },
+                isAllowAllMode ? t('pluginModeAllowAll') : t('pluginModeDenyAll'),
+              ),
+            ),
+            h('div', { className: 'dshr-tabs', role: 'tablist' },
+              h('button', {
+                type: 'button',
+                role: 'tab',
+                className: 'dshr-tab',
+                id: 'dshr-plugin-mode-allow-all',
+                'aria-selected': isAllowAllMode ? 'true' : 'false',
+                onClick: () => {
+                  if (!isAllowAllMode) {
+                    markPluginDirty();
+                    setPluginModeDraft('allow_all');
+                  }
+                },
+              }, t('pluginModeAllowAll')),
+              h('button', {
+                type: 'button',
+                role: 'tab',
+                className: 'dshr-tab',
+                id: 'dshr-plugin-mode-deny-all',
+                'aria-selected': !isAllowAllMode ? 'true' : 'false',
+                onClick: () => {
+                  if (isAllowAllMode) {
+                    markPluginDirty();
+                    setPluginModeDraft('deny_all');
+                  }
+                },
+              }, t('pluginModeDenyAll')),
+            ),
+            h('div', { className: 'dshr-label', id: 'dshr-plugin-policy-hint' },
+              isAllowAllMode ? t('pluginBlacklistHint') : t('pluginWhitelistHint'),
+            ),
+            pluginAccess?.envOverride && h('div', { className: 'dshr-warn' }, t('pluginEnvOverrideNote')),
+            pluginError && h('div', { className: 'dshr-err', role: 'alert' }, pluginError),
+            allPlugins.length === 0
+              ? h('div', { className: 'dshr-label' }, t('pluginEmpty'))
+              : h('div', { className: 'dshr-row', id: 'dshr-plugin-list' },
+                  allPlugins.map((pkg) => {
+                    const checked = isAllowAllMode
+                      ? blockedPluginsDraft.includes(pkg)
+                      : allowedPluginsDraft.includes(pkg);
+                    const isAllowed = isAllowAllMode ? !checked : checked;
+                    return h('label', {
+                      key: pkg,
+                      className: `dshr-plugin-pill ${isAllowed ? 'is-allowed' : 'is-blocked'}`,
+                    },
+                      h('input', {
+                        type: 'checkbox',
+                        'data-plugin-pkg': pkg,
+                        checked,
+                        onChange: (e) => {
+                          markPluginDirty();
+                          const nextChecked = e.target.checked;
+                          if (isAllowAllMode) {
+                            setBlockedPluginsDraft((prev) => nextChecked
+                              ? [...new Set([...prev, pkg])]
+                              : prev.filter((item) => item !== pkg));
+                          } else {
+                            setAllowedPluginsDraft((prev) => nextChecked
+                              ? [...new Set([...prev, pkg])]
+                              : prev.filter((item) => item !== pkg));
+                          }
+                        },
+                      }),
+                      h('span', null, pkg),
+                      h('span', { className: `dshr-state-tag ${isAllowed ? 'is-allowed' : 'is-blocked'}` },
+                        isAllowed ? t('pluginStateAllowed') : t('pluginStateBlocked'),
+                      ),
+                    );
+                  }),
+                ),
+            h('div', { className: 'dshr-label' }, t('pluginCoreNote')),
+            h('div', { className: 'dshr-row' },
+              h('button', {
+                type: 'submit',
+                id: 'dshr-save-plugin-policy-btn',
+                className: 'dshr-btn dshr-btn-primary',
+                disabled: busy === 'plugin-policy' || !pluginDirty,
+              }, busy === 'plugin-policy' ? t('saving') : t('savePluginPolicy')),
+              pluginDirty && h('button', {
+                type: 'button',
+                id: 'dshr-reset-plugin-policy-btn',
+                className: 'dshr-btn',
+                onClick: handleDiscardPluginDrafts,
+              }, t('resetDraft')),
+            ),
+            isRemote && pluginReloadNeeded && h('div', { className: 'dshr-notice', id: 'dshr-remote-reload-banner' },
+              h('div', { className: 'dshr-row', style: { justifyContent: 'space-between' } },
+                h('span', null, t('pluginPolicySavedRemote')),
+                h('button', {
+                  type: 'button',
+                  id: 'dshr-remote-reload-workbench',
+                  className: 'dshr-btn dshr-btn-primary',
+                  onClick: () => { window.location.reload(); },
+                }, t('reloadWorkbenchBtn')),
+              ),
+            ),
+          ),
+        );
+      };
+
       // ---- Remote Restricted Session View ----
       if (isRemote) {
         const mode = shellSnap?.transportState || shellSnap?.transport || 'Relay';
@@ -925,6 +1196,7 @@
                 isReconnecting ? t('remoteReconnecting') : (isP2p ? t('remoteP2p') : t('remoteRelay')),
               ),
             ),
+            toast && !pluginReloadNeeded && h('div', { className: 'dshr-notice', role: 'status' }, toast),
             h('div', { className: 'dshr-card' },
               h('div', { className: 'dshr-card-head' },
                 h('h3', { className: 'dshr-card-title' }, `${t('remoteChannel')} · ${hostName}`),
@@ -950,6 +1222,7 @@
                 }, t('lockForgetBtn')),
               ),
             ),
+            renderPluginAccessCard(),
           ),
         );
       }
@@ -960,8 +1233,9 @@
       const relayConnected = Boolean(overview?.bridge?.relayConnected);
       const sessions = overview?.bridge?.sessions || [];
       const endpoint = overview?.web?.endpoint || '';
-      const installedPlugins = overview?.installedWebPlugins || [];
       const tokenExpiresAt = overview?.function?.expiresAt;
+      const bridgeConflict = overview?.bridgeConflict || null;
+      const relayHostConflict = Boolean(overview?.bridge?.hostConflict);
 
       const startProvisionRequest = async (payload) => {
         setBusy('provision');
@@ -1082,7 +1356,6 @@
               hostName: hostNameDraft.trim(),
               p2pEnabled: p2pDraft,
               stunUrls: stunUrls.length ? stunUrls : 'none',
-              allowedWebPlugins: pluginsDraft,
             }),
           });
           if (resp.ok) {
@@ -1203,6 +1476,22 @@
           ),
 
           toast && h('div', { className: 'dshr-notice', role: 'status' }, toast),
+
+          showConfiguredPanel && (bridgeConflict || relayHostConflict) && h('div', {
+            className: 'dshr-card',
+            id: 'dshr-bridge-conflict-banner',
+            role: 'alert',
+          },
+            h('div', { className: 'dshr-card-head' },
+              h('h3', { className: 'dshr-card-title' }, t('conflictBannerTitle')),
+              bridgeConflict?.ownerPid && h('span', { className: 'dshr-badge' }, `PID ${bridgeConflict.ownerPid}`),
+            ),
+            h('div', { className: 'dshr-warn' },
+              bridgeConflict
+                ? `${t('conflictBannerOwnedByOther')}${bridgeConflict.ownerOrigin ? ` (${bridgeConflict.ownerOrigin})` : ''}`
+                : t('conflictBannerRelayKicked'),
+            ),
+          ),
 
           // Explicit admin load error card (prevents falsely rendering "Not bound yet" on 403/5xx/network failure)
           isAdminLoadError && h('div', { className: 'dshr-card', id: 'dshr-admin-error-card', role: 'alert' },
@@ -1429,7 +1718,10 @@
             ),
           ),
 
-          // Card 4: Host, Network, Plugin Allowlist & Switch/Rebind Cloud App
+          // Card 4: Remote Plugin Access Policy (Blacklist / Whitelist)
+          showConfiguredPanel && renderPluginAccessCard(),
+
+          // Card 5: Host, Network & Switch/Rebind Cloud App
           showConfiguredPanel && h('div', { className: 'dshr-card' },
             h('form', { style: { display: 'grid', gap: 14 }, onSubmit: handleSaveSettings },
               h('div', { className: 'dshr-card-head' },
@@ -1464,24 +1756,6 @@
                   placeholder: 'stun:stun.cloudflare.com:3478',
                   onChange: (e) => { markDirty(); setStunDraft(e.target.value); },
                 }),
-              ),
-              installedPlugins.length > 0 && h('div', { className: 'dshr-field' },
-                h('span', { className: 'dshr-label' }, t('allowedPlugins')),
-                h('div', { className: 'dshr-row' },
-                  installedPlugins.map((pkg) => h('label', { key: pkg, className: 'dshr-badge', style: { cursor: 'pointer' } },
-                    h('input', {
-                      type: 'checkbox',
-                      checked: pluginsDraft.includes(pkg),
-                      onChange: (e) => {
-                        markDirty();
-                        setPluginsDraft((prev) => e.target.checked
-                          ? [...new Set([...prev, pkg])]
-                          : prev.filter((item) => item !== pkg));
-                      },
-                    }),
-                    pkg,
-                  )),
-                ),
               ),
               h('div', { className: 'dshr-row' },
                 h('button', { type: 'submit', id: 'dshr-save-settings-btn', className: 'dshr-btn dshr-btn-primary', disabled: busy === 'settings' },

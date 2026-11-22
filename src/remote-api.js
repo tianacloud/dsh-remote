@@ -299,6 +299,51 @@ export function createRemoteApiHandler(controller, connection = null) {
         : jsonResponse(200, pub);
     }
 
+    // 1b. Plugin Access Policy (editable from BOTH local owner session AND E2EE-authenticated remote tunnel)
+    if (path === '/api/tiana-remote/plugin-access') {
+      if (method !== 'GET' && method !== 'HEAD' && method !== 'POST') {
+        return jsonResponse(405, { ok: false, error: 'Method not allowed' });
+      }
+      const pubReject = await guardPublicRequest(request, connection, meta);
+      if (pubReject) return pubReject;
+      try {
+        if (method === 'GET' || method === 'HEAD') {
+          const policy = await controller.getPluginAccess();
+          return method === 'HEAD'
+            ? new Response(null, { status: 200, headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } })
+            : jsonResponse(200, policy);
+        }
+        const body = await readJsonBody(request);
+        const patch = {};
+        if (body.mode !== undefined) {
+          if (body.mode !== 'allow_all' && body.mode !== 'deny_all') {
+            return jsonResponse(400, { ok: false, error: 'mode must be "allow_all" or "deny_all"' });
+          }
+          patch.mode = body.mode;
+        }
+        if (body.blockedWebPlugins !== undefined) {
+          if (!Array.isArray(body.blockedWebPlugins)) {
+            return jsonResponse(400, { ok: false, error: 'blockedWebPlugins must be an array' });
+          }
+          patch.blockedWebPlugins = body.blockedWebPlugins.map((p) => String(p).trim()).filter(Boolean);
+        }
+        if (body.allowedWebPlugins !== undefined) {
+          if (!Array.isArray(body.allowedWebPlugins)) {
+            return jsonResponse(400, { ok: false, error: 'allowedWebPlugins must be an array' });
+          }
+          patch.allowedWebPlugins = body.allowedWebPlugins.map((p) => String(p).trim()).filter(Boolean);
+        }
+        const updated = await controller.updatePluginAccess(patch);
+        return jsonResponse(200, updated);
+      } catch (err) {
+        const status = Number.isInteger(err?.status) ? err.status : 500;
+        return jsonResponse(status, {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     // 2. Local-only Admin endpoints (triple-guarded)
     if (path === '/api/tiana-remote/admin' || path.startsWith('/api/tiana-remote/admin/')) {
       const adminReject = await guardAdminRequest(request, connection, meta);
@@ -378,6 +423,18 @@ export function createRemoteApiHandler(controller, connection = null) {
             } catch (err) {
               return jsonResponse(400, { ok: false, error: err.message });
             }
+          }
+          if (body.pluginAccessMode !== undefined) {
+            if (body.pluginAccessMode !== 'allow_all' && body.pluginAccessMode !== 'deny_all') {
+              return jsonResponse(400, { ok: false, error: 'pluginAccessMode must be "allow_all" or "deny_all"' });
+            }
+            patch.pluginAccessMode = body.pluginAccessMode;
+          }
+          if (body.blockedWebPlugins !== undefined) {
+            if (!Array.isArray(body.blockedWebPlugins)) {
+              return jsonResponse(400, { ok: false, error: 'blockedWebPlugins must be an array' });
+            }
+            patch.blockedWebPlugins = body.blockedWebPlugins.map((p) => String(p).trim()).filter(Boolean);
           }
           if (body.allowedWebPlugins !== undefined) {
             if (!Array.isArray(body.allowedWebPlugins)) {
@@ -522,6 +579,7 @@ export function registerWebServerRoutes(webServer, connection, controller) {
   const disposers = [
     webServer.register({ kind: 'exact', path: '/api/tiana-remote/public-status', handler: handleNode }),
     webServer.register({ kind: 'exact', path: '/api/tiana-remote/status', handler: handleNode }),
+    webServer.register({ kind: 'exact', path: '/api/tiana-remote/plugin-access', handler: handleNode }),
     webServer.register({ kind: 'prefix', path: '/api/tiana-remote/admin', handler: handleNode }),
   ];
 
@@ -535,7 +593,7 @@ export function registerWebServerRoutes(webServer, connection, controller) {
 /**
  * Fallback route mounting onto `connection.fetch.register` when `webServer.register` is unavailable.
  * Because Fetch requests lack a verifiable TCP `remoteAddress`, all `/api/tiana-remote/admin/*`
- * routes fail closed with 403 while public status remains available.
+ * routes fail closed with 403 while public status and plugin-access policy remain available.
  */
 export function registerRemoteRoutes(connection, controller) {
   const registry = connection?.fetch;
@@ -546,6 +604,7 @@ export function registerRemoteRoutes(connection, controller) {
   const routes = [
     { path: '/api/tiana-remote/status', methods: ['GET', 'HEAD'] },
     { path: '/api/tiana-remote/public-status', methods: ['GET', 'HEAD'] },
+    { path: '/api/tiana-remote/plugin-access', methods: ['GET', 'HEAD', 'POST'] },
     { path: '/api/tiana-remote/admin/overview', methods: ['GET', 'HEAD'] },
     { path: '/api/tiana-remote/admin/status', methods: ['GET', 'HEAD'] },
     { path: '/api/tiana-remote/admin/toggle', methods: ['POST'] },

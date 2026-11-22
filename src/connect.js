@@ -1,11 +1,12 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { promisify } from 'node:util';
 import { copyToClipboard, maskPairingKey } from './clipboard.js';
-import { formatPairingKey, readRuntimeInfo, resolveDshHome } from './state.js';
+import { formatPairingKey, isPidAlive, readRuntimeInfo, resolveDshHome } from './state.js';
 import { bindTianaRemoteWeb, getTianaStatus, tianaBinary } from './tiana-cli.js';
 
 const execFileAsync = promisify(execFile);
@@ -394,6 +395,33 @@ export async function isLocalDshResponsive(origin, { fetchFn = fetch, timeoutMs 
   }
 }
 
+export function isTcpEndpointReachable(origin, { timeoutMs = 1500 } = {}) {
+  if (!origin) return Promise.resolve(false);
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return Promise.resolve(false);
+  }
+  const host = parsed.hostname.replace(/^\[|\]$/gu, '');
+  const port = Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80));
+  if (!host || !Number.isInteger(port) || port <= 0) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    const socket = createConnection({ host, port });
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+}
+
 export function buildDshStartArgs({ profile = 'web', port = 3080 } = {}) {
   return ['--profile', String(profile || 'web'), '--port', String(port), '--no-open'];
 }
@@ -499,12 +527,34 @@ export async function runConnect(options = {}, deps = {}) {
   const runtime = deps.readRuntime ? deps.readRuntime() : readRuntimeInfo();
   let runtimeAlive = false;
   if (runtime) {
+    const probeOrigins = [...new Set([
+      runtime.advertisedOrigin,
+      runtime.origin,
+      `http://127.0.0.1:${port}`,
+    ].filter(Boolean))];
     if (deps.checkDshResponsive) {
-      runtimeAlive = await deps.checkDshResponsive(runtime.origin || `http://127.0.0.1:${port}`);
-    } else if (runtime.origin) {
-      runtimeAlive = await isLocalDshResponsive(runtime.origin, { fetchFn });
+      for (const candidate of probeOrigins) {
+        if (await deps.checkDshResponsive(candidate)) {
+          runtimeAlive = true;
+          break;
+        }
+      }
     } else {
-      runtimeAlive = await isLocalDshResponsive(`http://127.0.0.1:${port}`, { fetchFn });
+      for (const candidate of probeOrigins) {
+        if (await isLocalDshResponsive(candidate, { fetchFn })) {
+          runtimeAlive = true;
+          break;
+        }
+      }
+      // If HTTPS probe failed (e.g. TLS SAN mismatch on raw Tailscale/LAN IP) while runtime.pid
+      // is alive and its HTTPS port accepts TCP connections, reuse the live DSH instance instead
+      // of spawning a competing duplicate process.
+      const checkPidAlive = deps.isPidAlive ?? isPidAlive;
+      const checkTcpReachable = deps.checkTcpReachable ?? isTcpEndpointReachable;
+      if (!runtimeAlive && checkPidAlive(runtime.pid) &&
+          typeof runtime.origin === 'string' && runtime.origin.startsWith('https://')) {
+        runtimeAlive = await checkTcpReachable(runtime.origin);
+      }
     }
   }
 

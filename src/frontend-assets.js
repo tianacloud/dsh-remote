@@ -140,34 +140,80 @@ function cleanBundle(file) {
 const BUILTIN_CLIENT_PREFIX = '@deepseek-ai/dsh-';
 const SELF_CLIENT_MODULE = '@tianacloud/dsh-remote';
 
+export function isProtectedWebPlugin(id) {
+  return typeof id === 'string' && (id === BOOTSTRAP || id.startsWith(BUILTIN_CLIENT_PREFIX) || id === SELF_CLIENT_MODULE);
+}
+
+function uniquePluginList(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.map((id) => String(id).trim()).filter(Boolean))];
+}
+
+/**
+ * Normalize a plugin access policy or legacy allowlist into:
+ * `{ mode: 'allow_all' | 'deny_all', blockedWebPlugins: string[], allowedWebPlugins: string[] }`.
+ *
+ * - Policy object: respects `mode` (`'deny_all'` or default `'allow_all'`), `blockedWebPlugins`, `allowedWebPlugins`.
+ * - Legacy array/string allowlist: `'*'` -> `allow_all`; explicit list / `[]` -> `deny_all` with that allowlist.
+ * - Omitted (`undefined` / `null`): defaults to `allow_all` with empty blacklist.
+ */
+export function normalizePluginPolicy(policyOrAllowlist) {
+  if (policyOrAllowlist && typeof policyOrAllowlist === 'object' && !Array.isArray(policyOrAllowlist)) {
+    const mode = policyOrAllowlist.mode === 'deny_all' ? 'deny_all' : 'allow_all';
+    const blockedWebPlugins = uniquePluginList(policyOrAllowlist.blockedWebPlugins)
+      .filter((id) => !isProtectedWebPlugin(id));
+    const allowedWebPlugins = uniquePluginList(policyOrAllowlist.allowedWebPlugins)
+      .filter((id) => !isProtectedWebPlugin(id));
+    return { mode, blockedWebPlugins, allowedWebPlugins };
+  }
+  if (Array.isArray(policyOrAllowlist) || typeof policyOrAllowlist === 'string') {
+    const rawLimit = Array.isArray(policyOrAllowlist)
+      ? policyOrAllowlist
+      : policyOrAllowlist.split(',');
+    const limit = uniquePluginList(rawLimit);
+    if (limit.includes('*')) {
+      return { mode: 'allow_all', blockedWebPlugins: [], allowedWebPlugins: [] };
+    }
+    return {
+      mode: 'deny_all',
+      blockedWebPlugins: [],
+      allowedWebPlugins: limit.filter((id) => !isProtectedWebPlugin(id)),
+    };
+  }
+  return { mode: 'allow_all', blockedWebPlugins: [], allowedWebPlugins: [] };
+}
+
 /**
  * Select which active DSH client modules are exposed over the remote tunnel.
- * - `allowlist: ['*']` (or `'*'`): allow all active modules.
- * - `allowlist: []` (default) or omitted: allow ONLY builtin DSH core modules
- *   (`@deepseek-ai/dsh-*`) plus `@tianacloud/dsh-remote` itself; third-party plugins are blocked.
- * - Explicit IDs: allow builtin core + `@tianacloud/dsh-remote` + exact allowlisted active plugins.
+ * Builtin DSH core (`@deepseek-ai/dsh-*`, `@deepseek-ai/dsh-client-modules`) and
+ * `@tianacloud/dsh-remote` are ALWAYS allowed and cannot be blacklisted.
+ *
+ * - `mode: 'allow_all'` (default): allow all active modules except `blockedWebPlugins`.
+ * - `mode: 'deny_all'`: allow only protected modules plus `allowedWebPlugins`.
+ * - Legacy array/string allowlists (`[]`, `['pkg']`, `['*']`) remain fully supported.
  */
-export function selectAllowedWebPlugins(modules, allowlist) {
-  const rawLimit = Array.isArray(allowlist)
-    ? allowlist
-    : typeof allowlist === 'string'
-      ? allowlist.split(',')
-      : [];
-  const limit = rawLimit.map((id) => String(id).trim()).filter(Boolean);
-  const allowAll = limit.includes('*');
-
-  if (allowAll) {
-    return new Set(modules.keys());
-  }
-
+export function selectAllowedWebPlugins(modules, policyOrAllowlist) {
+  const policy = normalizePluginPolicy(policyOrAllowlist);
   const selected = new Set();
+
   if (modules.has(BOOTSTRAP)) selected.add(BOOTSTRAP);
   for (const id of modules.keys()) {
-    if (id.startsWith(BUILTIN_CLIENT_PREFIX) || id === SELF_CLIENT_MODULE) {
+    if (isProtectedWebPlugin(id)) {
       selected.add(id);
     }
   }
-  for (const id of limit) {
+
+  if (policy.mode === 'allow_all') {
+    const blocked = new Set(policy.blockedWebPlugins);
+    for (const id of modules.keys()) {
+      if (!blocked.has(id)) {
+        selected.add(id);
+      }
+    }
+    return selected;
+  }
+
+  for (const id of policy.allowedWebPlugins) {
     if (modules.has(id)) {
       selected.add(id);
     }
@@ -187,13 +233,12 @@ function compilePlugins(graph, options, add) {
     }
     modules.set(row.id, row);
   }
-  const rawLimit = Array.isArray(options.allowlist)
-    ? options.allowlist
-    : typeof options.allowlist === 'string'
-      ? options.allowlist.split(',')
-      : [];
-  const allowAll = rawLimit.map((id) => String(id).trim()).includes('*');
-  const selected = selectAllowedWebPlugins(modules, options.allowlist);
+  const policy = normalizePluginPolicy(
+    options.pluginPolicy !== undefined ? options.pluginPolicy : options.allowlist,
+  );
+  const allowAllUnblocked = policy.mode === 'allow_all' && policy.blockedWebPlugins.length === 0;
+  const blockedSet = new Set(policy.blockedWebPlugins);
+  const selected = selectAllowedWebPlugins(modules, policy);
   if (modules.size > 0 && !modules.has(BOOTSTRAP)) {
     throw new Error('A required DSH client module is absent: ' + BOOTSTRAP);
   }
@@ -208,7 +253,7 @@ function compilePlugins(graph, options, add) {
       const name = dependency.replace(/\/client$/u, '');
       if (selected.has(name)) continue;
       if (modules.has(name)) {
-        if (allowAll || isBuiltinOrBootstrap(name) || name === SELF_CLIENT_MODULE) {
+        if ((allowAllUnblocked && !blockedSet.has(name)) || isBuiltinOrBootstrap(name) || name === SELF_CLIENT_MODULE) {
           selected.add(name);
         } else if (isBuiltinOrBootstrap(id)) {
           continue;
@@ -285,19 +330,32 @@ export class FrontendAssets {
     this.waitingCompression = [];
   }
 
-  setAllowlist(allowlist) {
-    const nextKey = JSON.stringify(allowlist ?? null);
-    const prevKey = JSON.stringify(this.options.allowlist ?? null);
-    if (nextKey === prevKey) return false;
-    this.options.allowlist = allowlist;
+  getPluginPolicy() {
+    return normalizePluginPolicy(
+      this.options.pluginPolicy !== undefined ? this.options.pluginPolicy : this.options.allowlist,
+    );
+  }
+
+  setPluginPolicy(policyOrAllowlist) {
+    const next = normalizePluginPolicy(policyOrAllowlist);
+    const prev = this.getPluginPolicy();
+    if (JSON.stringify(next) === JSON.stringify(prev) && this.options.pluginPolicy !== undefined) {
+      return false;
+    }
+    this.options.pluginPolicy = next;
+    delete this.options.allowlist;
     this.snapshot = null;
     this.building = null;
     return true;
   }
 
+  setAllowlist(allowlist) {
+    return this.setPluginPolicy(allowlist);
+  }
+
   async prepare(rows) {
     const graph = rows.find((row) => row.kind === 'global' && row.name === '__DSH_BOOT__')?.value;
-    const signature = JSON.stringify({ graph: graph ?? null, allowlist: this.options.allowlist ?? null });
+    const signature = JSON.stringify({ graph: graph ?? null, policy: this.getPluginPolicy() });
     if (!this.snapshot || this.snapshot.signature !== signature) {
       const existing = this.building;
       if (existing?.signature === signature) return existing.promise;

@@ -175,7 +175,11 @@ test('state.js v1->v2 lossless migration, file locking, and dshk1_ pairing key r
     assert.equal(v2.e2ee.secret, rawSecret);
     assert.deepEqual(v2.tiana, v1.tiana);
     assert.deepEqual(v2.network, { p2pEnabled: true, stunUrls: ['stun:stun.cloudflare.com:3478'] });
-    assert.deepEqual(v2.security, { allowedWebPlugins: [] });
+    assert.deepEqual(v2.security, {
+      pluginAccessMode: 'allow_all',
+      blockedWebPlugins: [],
+      allowedWebPlugins: [],
+    });
 
     // withStateLock serializes concurrent writers cleanly
     saveRemoteState({ count: 0 }, filePath);

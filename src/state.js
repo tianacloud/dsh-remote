@@ -14,6 +14,9 @@ import {
 
 export const STATE_CONFIG_VERSION = 2;
 export const DEFAULT_STUN_URLS = ['stun:stun.cloudflare.com:3478'];
+export const PLUGIN_ACCESS_MODE_ALLOW_ALL = 'allow_all';
+export const PLUGIN_ACCESS_MODE_DENY_ALL = 'deny_all';
+export const DEFAULT_PLUGIN_ACCESS_MODE = PLUGIN_ACCESS_MODE_ALLOW_ALL;
 
 export { formatPairingKey, normalizePairingKey };
 
@@ -35,6 +38,10 @@ export function resolveStatePath(filePath) {
 
 export function defaultRuntimePath() {
   return join(defaultStateDir(), 'runtime.json');
+}
+
+export function defaultBridgeLockPath(statePath = defaultStatePath()) {
+  return join(dirname(resolveStatePath(statePath)), 'bridge-owner.json');
 }
 
 function verifyPrivate(stat, type) {
@@ -130,6 +137,16 @@ export function migrateRemoteState(raw) {
     ? raw.network.stunUrls.map((u) => String(u).trim()).filter(Boolean)
     : [...DEFAULT_STUN_URLS];
   const p2pEnabled = raw.network?.p2pEnabled !== undefined ? Boolean(raw.network.p2pEnabled) : true;
+  const rawMode = raw.security?.pluginAccessMode ?? raw.pluginAccessMode;
+  const pluginAccessMode = rawMode === PLUGIN_ACCESS_MODE_DENY_ALL
+    ? PLUGIN_ACCESS_MODE_DENY_ALL
+    : DEFAULT_PLUGIN_ACCESS_MODE;
+  const rawBlocked = Array.isArray(raw.security?.blockedWebPlugins)
+    ? raw.security.blockedWebPlugins
+    : Array.isArray(raw.blockedWebPlugins)
+      ? raw.blockedWebPlugins
+      : [];
+  const blockedWebPlugins = [...new Set(rawBlocked.map((item) => String(item).trim()).filter(Boolean))];
   const rawAllowed = Array.isArray(raw.security?.allowedWebPlugins)
     ? raw.security.allowedWebPlugins
     : Array.isArray(raw.allowedWebPlugins)
@@ -148,6 +165,8 @@ export function migrateRemoteState(raw) {
     },
     security: {
       ...(raw.security && typeof raw.security === 'object' ? raw.security : {}),
+      pluginAccessMode,
+      blockedWebPlugins,
       allowedWebPlugins,
     },
     allowedWebPlugins,
@@ -181,7 +200,7 @@ export function loadNormalizedRemoteState(filePath = defaultStatePath()) {
   return migrateRemoteState(raw);
 }
 
-function isPidAlive(pid) {
+export function isPidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -316,12 +335,19 @@ export async function withStateLock(fn, filePath = defaultStatePath(), { timeout
   }
 }
 
-export function writeRuntimeInfo(info, filePath = defaultRuntimePath()) {
+export function writeRuntimeInfo(info, filePath = defaultRuntimePath(), { overwriteLiveOther = false } = {}) {
+  if (!overwriteLiveOther) {
+    const existing = readRuntimeInfo(filePath);
+    if (existing && existing.pid !== process.pid) {
+      return false;
+    }
+  }
   saveRemoteState({
     pid: process.pid,
     startedAt: new Date().toISOString(),
     ...info,
   }, filePath);
+  return true;
 }
 
 export function readRuntimeInfo(filePath = defaultRuntimePath()) {
@@ -342,6 +368,68 @@ export function removeRuntimeInfo(filePath = defaultRuntimePath()) {
     }
   } catch {
     // ignore
+  }
+}
+
+/**
+ * Atomically claim exclusive HostBridge ownership for a state directory across OS processes.
+ * Prevents two DSH processes sharing the same state.json from fighting over the same Relay host_id.
+ */
+export async function claimBridgeOwnership(
+  ownerInfo = {},
+  statePath = defaultStatePath(),
+  { pid = process.pid, isAlive = isPidAlive } = {},
+) {
+  const targetStatePath = resolveStatePath(statePath);
+  const lockPath = defaultBridgeLockPath(targetStatePath);
+  return await withStateLock(() => {
+    let existing = null;
+    try {
+      existing = loadRemoteState(lockPath);
+    } catch {
+      existing = null;
+    }
+    const sameOwner = existing
+      && existing.pid === pid
+      && (!existing.instanceId || !ownerInfo.instanceId || existing.instanceId === ownerInfo.instanceId);
+    if (existing && Number.isInteger(existing.pid) && !sameOwner && isAlive(existing.pid)) {
+      return { acquired: false, owner: existing };
+    }
+    const record = {
+      pid,
+      instanceId: ownerInfo.instanceId || '',
+      hostId: ownerInfo.hostId || '',
+      origin: ownerInfo.origin || '',
+      advertisedOrigin: ownerInfo.advertisedOrigin || '',
+      acquiredAt: new Date().toISOString(),
+    };
+    saveRemoteState(record, lockPath);
+    return { acquired: true, owner: record };
+  }, targetStatePath);
+}
+
+export async function releaseBridgeOwnership(
+  instanceId = '',
+  statePath = defaultStatePath(),
+  { pid = process.pid } = {},
+) {
+  const targetStatePath = resolveStatePath(statePath);
+  const lockPath = defaultBridgeLockPath(targetStatePath);
+  try {
+    return await withStateLock(() => {
+      let existing = null;
+      try {
+        existing = loadRemoteState(lockPath);
+      } catch {
+        existing = null;
+      }
+      if (!existing) return false;
+      if (existing.pid !== pid) return false;
+      if (instanceId && existing.instanceId && existing.instanceId !== instanceId) return false;
+      try { unlinkSync(lockPath); return true; } catch { return false; }
+    }, targetStatePath);
+  } catch {
+    return false;
   }
 }
 
