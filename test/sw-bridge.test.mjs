@@ -287,3 +287,75 @@ test('dsh-remote-sw.js enforces strict iframe isolation under Referrer-Policy: n
     bound.close();
   }
 });
+
+test('dsh-remote-sw.js tunnels custom plugin root paths under /web/<id>/ while passing through platform, static shell, cross-origin, navigation, and sibling /web/ apps', async () => {
+  const origin = 'https://wcnw5aiuh2bx.tianacloud.site';
+  const scopePath = '/web/wcnw5aiuh2bx/';
+  const appBase = `${origin}${scopePath}`;
+  const navToken = 'b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5';
+  const harness = createSwHarness({ origin, scopePath });
+  const tunneledPaths = [];
+
+  const bound = await harness.bindWindow('win-owner-2', appBase, navToken, (req) => {
+    tunneledPaths.push(req.path);
+    return {
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+      body: new TextEncoder().encode(`ok:${req.path}`),
+    };
+  });
+
+  try {
+    // 1. Custom plugin root paths (and appBase-prefixed variants) MUST be tunneled with intact query strings
+    const customPaths = [
+      { url: `${origin}/tiana/api/template-cover?name=foo`, expected: '/tiana/api/template-cover?name=foo' },
+      { url: `${origin}/tiana/api/site-icon?id=bar`, expected: '/tiana/api/site-icon?id=bar' },
+      { url: `${origin}/my-plugin/img.png?size=64`, expected: '/my-plugin/img.png?size=64' },
+      { url: `${appBase}tiana/api/template-cover?name=baz`, expected: '/tiana/api/template-cover?name=baz' },
+      { url: `${origin}/api/file?path=a.png`, expected: '/api/file?path=a.png' },
+      { url: `${origin}/plugins/dshmarket/badge.svg`, expected: '/plugins/dshmarket/badge.svg' },
+    ];
+    for (const { url, expected } of customPaths) {
+      const resp = await harness.dispatchFetch({
+        url,
+        destination: 'image',
+        mode: 'no-cors',
+        clientId: 'win-owner-2',
+      });
+      assert.ok(resp, `expected SW to intercept and tunnel ${url}`);
+      assert.equal(resp.status, 200);
+      assert.equal(await resp.text(), `ok:${expected}`);
+    }
+    assert.deepEqual(tunneledPaths, customPaths.map((p) => p.expected));
+
+    // 2. Platform, static shell, external origin, top-level navigation, and sibling /web/<other>/ apps MUST passthrough (return null -> event.respondWith not called)
+    const passthroughCases = [
+      { url: 'https://cdn.example.test/cover.png', destination: 'image', mode: 'no-cors' },
+      { url: `${origin}/_tiana/session`, destination: '', mode: 'cors' },
+      { url: `${origin}/_tiana`, destination: '', mode: 'cors' },
+      { url: `${appBase}_tiana/session`, destination: '', mode: 'cors' },
+      { url: `${origin}/web/wcnw5aiuh2bx/_tiana`, destination: '', mode: 'cors' },
+      { url: `${appBase}assets/dsh-remote-entry.mjs`, destination: 'script', mode: 'cors' },
+      { url: `${origin}/brand/logo.svg`, destination: 'image', mode: 'no-cors' },
+      { url: `${origin}/favicon.ico`, destination: 'image', mode: 'no-cors' },
+      { url: appBase, destination: 'document', mode: 'navigate' },
+      { url: `${origin}/web/wcnw5aiuh2bx`, destination: 'document', mode: 'navigate' },
+      { url: `${origin}/`, destination: 'document', mode: 'navigate' },
+      { url: `${origin}/index.html`, destination: 'document', mode: 'navigate' },
+      { url: `${origin}/web/otherapp9999/`, destination: 'document', mode: 'navigate' },
+      { url: `${origin}/web/otherapp9999/api/status`, destination: '', mode: 'cors' },
+      { url: `${origin}/web/otherapp9999/tiana/api/site-icon`, destination: 'image', mode: 'no-cors' },
+    ];
+    const countBefore = tunneledPaths.length;
+    for (const tc of passthroughCases) {
+      const resp = await harness.dispatchFetch({
+        ...tc,
+        clientId: 'win-owner-2',
+      });
+      assert.equal(resp, null, `expected passthrough (null) for ${tc.url} (mode=${tc.mode})`);
+    }
+    assert.equal(tunneledPaths.length, countBefore, 'passthrough URLs must never hit the tunnel');
+  } finally {
+    bound.close();
+  }
+});

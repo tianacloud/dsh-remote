@@ -133,18 +133,24 @@ function shouldPassthrough(request, url, appBase) {
   const appBaseNoSlash = appBase.length > 1 && appBase.endsWith('/') ? appBase.slice(0, -1) : appBase;
 
   if (pathname.startsWith(`${appBase}_tiana/`) ||
+      pathname === `${appBaseNoSlash}/_tiana` ||
       pathname.startsWith('/_tiana/') ||
+      pathname === '/_tiana' ||
       pathname.startsWith(`${appBase}assets/`) ||
       pathname.startsWith('/brand/') ||
       pathname === '/favicon.ico') {
     return true;
   }
-  if (request.mode === 'navigate' && (pathname === appBase || pathname === appBaseNoSlash)) {
+  if (request.mode === 'navigate' && (
+    pathname === appBase ||
+    pathname === appBaseNoSlash ||
+    pathname === '/' ||
+    pathname === '/index.html'
+  )) {
     return true;
   }
-  if (appBase !== '/' && !pathname.startsWith(appBase) && pathname !== appBaseNoSlash &&
-      !pathname.startsWith('/api/') && pathname !== '/api' &&
-      !pathname.startsWith('/plugins/') && pathname !== '/plugins') {
+  if (appBase !== '/' && pathname.startsWith('/web/') &&
+      !pathname.startsWith(appBase) && pathname !== appBaseNoSlash) {
     return true;
   }
   return false;
