@@ -731,7 +731,7 @@ export function packMarketTemplate({ repoRoot = projectRoot, outPath } = {}) {
         functionId: remoteConfig.functionId,
         webId: remoteConfig.webId,
         defaultHostId: remoteConfig.defaultHostId || '',
-        appTitle: remoteConfig.appTitle || 'DSH Remote',
+        appTitle: remoteConfig.appTitle || 'dsh-tiana-remote',
         localRelayUrl: '',
       },
       clean: true,

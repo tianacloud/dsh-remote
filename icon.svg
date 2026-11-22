@@ -1,7 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="2" y="3" width="20" height="14" rx="2"/>
-  <path d="M8 21h8M12 17v4"/>
-  <path d="M7.5 10.5c1.3-1.3 3.2-2 5.2-2s3.9.7 5.2 2"/>
-  <path d="M9.8 12.8c.8-.8 1.8-1.2 2.9-1.2s2.1.4 2.9 1.2"/>
-  <circle cx="12.7" cy="14.5" r="0.6" fill="currentColor"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="dsh-tiana-remote" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <style>
+    .spider { stroke: #061a36; }
+    .wave-outer { stroke: #2563eb; }
+    .wave-inner { stroke: #38bdf8; }
+    @media (prefers-color-scheme: dark) {
+      .spider { stroke: #f5f5f4; }
+      .wave-outer { stroke: #60a5fa; }
+      .wave-inner { stroke: #38bdf8; }
+    }
+  </style>
+  <!-- Symmetrical signal waves -->
+  <path class="wave-outer" stroke-width="1.5" d="M4.3 6.2a9.6 9.6 0 0 0 0 11.6M19.7 6.2a9.6 9.6 0 0 1 0 11.6"/>
+  <path class="wave-inner" stroke-width="1.4" d="M6.4 8.2a6.6 6.6 0 0 0 0 7.6M17.6 8.2a6.6 6.6 0 0 1 0 7.6"/>
+  <!-- Tiana spider emblem -->
+  <path class="spider" stroke-width="1.55" d="M10.7 13.6 11.55 9.6a.46.46 0 0 1 .9 0l.85 4M10.4 13.5l.6.5h2l.6-.5"/>
+  <path class="spider" stroke-width="1.35" d="M10.9 10.9 9.4 9.6V7.5l.9-1.1M13.1 10.9l1.5-1.3V7.5L14 6.4"/>
+  <path class="spider" stroke-width="1.35" d="M10.5 11.9 8.6 11.2V9.3M13.5 11.9l1.9-.7V9.3"/>
+  <path class="spider" stroke-width="1.35" d="M10.4 12.9 8.6 13.6v2.1M13.6 12.9l1.8.7v2.1"/>
+  <path class="spider" stroke-width="1.35" d="M10.8 13.8 9.4 15.1v2l.9 1.1M13.2 13.8l1.4 1.3v2l-.9 1.1"/>
 </svg>

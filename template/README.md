@@ -1,6 +1,6 @@
-# DSH Remote
+# dsh-tiana-remote
 
-DSH Remote 是 Tiana 的托管 Web + Function 组合应用模板，用于在浏览器中安全、低延迟地远程访问个人电脑上运行的本地 DeepSeek Harness（DSH）工作台，无需公网 IP 或端口映射。
+dsh-tiana-remote 是 Tiana 的托管 Web + Function 组合应用模板，用于在浏览器中安全、低延迟地远程访问个人电脑上运行的本地 DeepSeek Harness（DSH）工作台，无需公网 IP 或端口映射。安装后在个人电脑终端执行 `npx --yes @tianacloud/dsh-remote@latest connect --app <appId>` 即可完成一键绑定。
 
 ## 核心能力
 
@@ -36,7 +36,7 @@ dsh-remote/
 
 ### 方式一：应用市场一键安装
 
-在 Tiana 应用市场安装 **DSH Remote** 后直接打开应用，按页面首次绑定向导在个人电脑终端运行提示的 `npx` 命令即可完成本机 DSH 环境配置与云端绑定。
+在 Tiana 应用市场安装 **dsh-tiana-remote** 后直接打开应用，按页面首次绑定向导在个人电脑终端运行提示的 `npx --yes @tianacloud/dsh-remote@latest connect --app <appId>` 命令即可完成本机 DSH 环境配置与云端绑定。
 
 ### 方式二：基于源码定制开发
 
@@ -63,4 +63,4 @@ npm run build
 
 - 本模板无需 SQLite 数据库（`database_required: false`）。
 - 个人电脑端需具备 `Node.js >= 24.9.0`；执行向导命令时，若本机尚未安装 DSH 会自动安装并启用所需插件，已有 DSH 实例则会保留既有工作区与对话记录。
-- 每个 DSH Remote 应用实例对应绑定一台个人电脑（支持通过 `--rebind` 换绑）；如需同时连接多台电脑，可在 Tiana 中安装多个应用实例分别命名区分。
+- 每个 dsh-tiana-remote 应用实例对应绑定一台个人电脑（支持通过 `--rebind` 换绑）；如需同时连接多台电脑，可在 Tiana 中安装多个应用实例分别命名区分。

@@ -399,8 +399,8 @@
     const PANEL_ID = 'tiana-remote';
 
     const zh = {
-      panel: 'Tiana Remote',
-      title: 'Tiana Remote',
+      panel: 'dsh-tiana-remote',
+      title: 'dsh-tiana-remote',
       subtitleLocal: '零公网 IP 端到端加密远程访问管理',
       subtitleRemote: '当前正在通过端到端加密隧道访问远程主机',
       statusOnline: '在线运行中',
@@ -416,7 +416,7 @@
       adminAccessDeniedTitle: '主机管理接口访问受限',
       adminErrorHint: '请确认当前浏览器通过本机或受信任的局域网／Tailnet 地址访问 DSH（且已配置 --trusted-host 并具备有效的本机所有者会话）。',
       retry: '重试',
-      loadingOverview: '正在加载 Tiana Remote 状态…',
+      loadingOverview: '正在加载 dsh-tiana-remote 状态…',
       toggleLabel: '启用远程访问',
       remoteUrl: '托管访问地址',
       copy: '复制',
@@ -479,10 +479,10 @@
       clearCacheDesc: '当本机升级了 DSH 或某个插件后，如果远端界面仍显示旧版本或出现异常，可点击此项清除当前浏览器缓存的前端资源并重新加载最新页面（不影响本机数据，也不会清除已保存的配对密钥）。',
       lockForgetTitle: '解除此设备绑定',
       lockForgetBtn: '解除此设备绑定',
-      lockForgetDesc: '仅清除当前设备／浏览器中保存的配对密钥并断开连接；Tiana 云端应用与本机电脑的关联仍然存在，仍可从其他设备或重新输入配对密钥登录。如需解除或更换云端应用与主机的绑定，请在本机电脑直接打开 DSH 的「Tiana Remote」面板操作（受安全边界限制，主机绑定与密钥管理仅限本机访问）。',
-      onboardTitle: '绑定或新建云端 DSH Remote 应用',
+      lockForgetDesc: '仅清除当前设备／浏览器中保存的配对密钥并断开连接；Tiana 云端应用与本机电脑的关联仍然存在，仍可从其他设备或重新输入配对密钥登录。如需解除或更换云端应用与主机的绑定，请在本机电脑直接打开 DSH 的「dsh-tiana-remote」面板操作（受安全边界限制，主机绑定与密钥管理仅限本机访问）。',
+      onboardTitle: '绑定或新建云端 dsh-tiana-remote 应用',
       onboardBindTab: '绑定已有 Tiana 应用',
-      onboardCreateTab: '在当前空间新建 DSH Remote 应用',
+      onboardCreateTab: '在当前空间新建 dsh-tiana-remote 应用',
       webIdLabel: 'Tiana Web 应用 ID（12 位，如 abc123456789）',
       webNameLabel: '新建应用名称',
       rebindForceLabel: '若该应用已绑定其他电脑，强制换绑到本机',
@@ -495,8 +495,8 @@
     };
 
     const en = {
-      panel: 'Tiana Remote',
-      title: 'Tiana Remote',
+      panel: 'dsh-tiana-remote',
+      title: 'dsh-tiana-remote',
       subtitleLocal: 'End-to-end encrypted remote access for this DSH host',
       subtitleRemote: 'Connected to your local DSH host via E2EE tunnel',
       statusOnline: 'Online',
@@ -512,7 +512,7 @@
       adminAccessDeniedTitle: 'Host admin API access denied',
       adminErrorHint: 'Verify you are accessing DSH over loopback or a private LAN/Tailnet address configured via --trusted-host with an active owner session.',
       retry: 'Retry',
-      loadingOverview: 'Loading Tiana Remote status…',
+      loadingOverview: 'Loading dsh-tiana-remote status…',
       toggleLabel: 'Enable Remote Access',
       remoteUrl: 'Hosted Remote URL',
       copy: 'Copy',
@@ -575,10 +575,10 @@
       clearCacheDesc: 'If the remote interface still shows an older version or behaves unexpectedly after upgrading DSH or a plugin on your host, clear this browser’s cached frontend assets and reload the latest UI. Your local host data and saved pairing key will not be affected.',
       lockForgetTitle: 'Unbind This Device',
       lockForgetBtn: 'Unbind This Device',
-      lockForgetDesc: 'Clears the saved pairing key on this device/browser only and disconnects. The link between your Tiana cloud app and host computer remains active, so you can still sign in from other devices or re-enter the pairing key. To unbind or switch the cloud app on your host, open the "Tiana Remote" panel directly on your host computer (host binding and key management are restricted to local access for security isolation).',
-      onboardTitle: 'Bind or Create a Tiana DSH Remote App',
+      lockForgetDesc: 'Clears the saved pairing key on this device/browser only and disconnects. The link between your Tiana cloud app and host computer remains active, so you can still sign in from other devices or re-enter the pairing key. To unbind or switch the cloud app on your host, open the "dsh-tiana-remote" panel directly on your host computer (host binding and key management are restricted to local access for security isolation).',
+      onboardTitle: 'Bind or Create a Tiana dsh-tiana-remote App',
       onboardBindTab: 'Bind Existing Tiana App',
-      onboardCreateTab: 'Create New DSH Remote App',
+      onboardCreateTab: 'Create New dsh-tiana-remote App',
       webIdLabel: 'Tiana Web App ID (12 chars, e.g. abc123456789)',
       webNameLabel: 'New Web App Name',
       rebindForceLabel: 'Force rebind to this machine if bound to another host',
@@ -770,14 +770,15 @@
       );
     }
 
-    function RemoteIcon() {
+    function RemoteIcon({ size = 18 } = {}) {
       return h('svg', {
-        width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none',
-        stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round',
+        width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
+        stroke: 'currentColor', strokeLinecap: 'round', strokeLinejoin: 'round',
       },
-        h('path', { d: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z' }),
-        h('path', { d: 'M12 13v4' }),
-        h('circle', { cx: 12, cy: 11, r: 1 }),
+        h('path', { d: 'M4.3 6.2a9.6 9.6 0 0 0 0 11.6M19.7 6.2a9.6 9.6 0 0 1 0 11.6', strokeWidth: 1.5, opacity: 0.72 }),
+        h('path', { d: 'M6.4 8.2a6.6 6.6 0 0 0 0 7.6M17.6 8.2a6.6 6.6 0 0 1 0 7.6', strokeWidth: 1.45, opacity: 0.9 }),
+        h('path', { d: 'M10.7 13.6 11.55 9.6a.46.46 0 0 1 .9 0l.85 4M10.4 13.5l.6.5h2l.6-.5', strokeWidth: 1.55 }),
+        h('path', { d: 'M10.9 10.9 9.4 9.6V7.5l.9-1.1M13.1 10.9l1.5-1.3V7.5L14 6.4M10.5 11.9 8.6 11.2V9.3M13.5 11.9l1.9-.7V9.3M10.4 12.9 8.6 13.6v2.1M13.6 12.9l1.8.7v2.1M10.8 13.8 9.4 15.1v2l.9 1.1M13.2 13.8l1.4 1.3v2l-.9 1.1', strokeWidth: 1.35 }),
       );
     }
 
@@ -838,7 +839,7 @@
       const [bindWebId, setBindWebId] = useState('');
       const [bindHostName, setBindHostName] = useState('');
       const [bindForceRebind, setBindForceRebind] = useState(false);
-      const [createWebName, setCreateWebName] = useState('DSH Remote');
+      const [createWebName, setCreateWebName] = useState('dsh-tiana-remote');
       const [rebindWebId, setRebindWebId] = useState('');
       const [provisionStatus, setProvisionStatus] = useState(null);
       const [lastProvisionPayload, setLastProvisionPayload] = useState(null);
@@ -1534,7 +1535,7 @@
                     e.preventDefault();
                     void startProvisionRequest({
                       mode: 'create',
-                      webName: createWebName.trim() || 'DSH Remote',
+                      webName: createWebName.trim() || 'dsh-tiana-remote',
                       hostName: bindHostName.trim() || undefined,
                     });
                   },

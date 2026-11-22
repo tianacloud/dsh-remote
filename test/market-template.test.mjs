@@ -25,7 +25,7 @@ test('packMarketTemplate builds a valid unified install.zip without mutating rel
 
     // Top-level verification summary
     assert.equal(result.name, 'dsh-remote');
-    assert.equal(result.display_name, 'DSH Remote');
+    assert.equal(result.display_name, 'dsh-tiana-remote');
     assert.equal(result.entry, 'dsh-remote-entry.mjs');
     assert.equal(result.database_required, false);
     assert.equal(result.has_source, true);

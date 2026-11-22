@@ -1,9 +1,9 @@
 {
-  "name": "Tiana Remote",
+  "name": "dsh-tiana-remote",
   "description": "End-to-end encrypted remote access for DeepSeek Harness (DSH) via Tiana with adaptive sidebar panel, standard QR code, token renewal, and cloud onboarding.",
-  "panel": "Tiana Remote",
+  "panel": "dsh-tiana-remote",
   "renewToken": "Renew Now",
   "rebindApp": "Switch / Rebind Cloud App",
   "bindExisting": "Bind Existing Tiana App",
-  "createApp": "Create New DSH Remote App"
+  "createApp": "Create New dsh-tiana-remote App"
 }

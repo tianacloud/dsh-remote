@@ -62,7 +62,7 @@ export function buildWebDist({ outDir, config = {}, clean = true } = {}) {
     functionId: config.functionId || '',
     webId: config.webId || '',
     defaultHostId: config.defaultHostId || '',
-    appTitle: config.appTitle || 'DSH Remote',
+    appTitle: config.appTitle || 'dsh-tiana-remote',
     localRelayUrl: config.localRelayUrl || '',
   };
   writeFileSync(join(output, 'remote-config.json'), JSON.stringify(finalConfig) + '\n');

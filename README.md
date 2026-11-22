@@ -1,12 +1,12 @@
-# DSH Remote
+# dsh-tiana-remote
 
-从 Tiana 托管网页安全访问本机 DeepSeek Harness（DSH）。通过 Tiana Function Relay 完成端到端加密认证（ECDH P-256 + HKDF-SHA256 + AES-256-GCM），支持 WebRTC P2P 直连与 Relay 加密中继无感切换，并提供原生子资源流式桥接、大媒体 `206 Partial Content` 窗口流控、主线程 `EventSource`（SSE）保活、DSH 侧栏配置面板与云端一键引导绑定。
+`@tianacloud/dsh-remote`（DeepSeek Harness 侧栏与 Tiana 应用市场统一显示名称：**`dsh-tiana-remote`**）用于从 Tiana 托管网页安全访问本机 DeepSeek Harness（DSH）。通过 Tiana Function Relay 完成端到端加密认证（ECDH P-256 + HKDF-SHA256 + AES-256-GCM），支持 WebRTC P2P 直连与 Relay 加密中继无感切换，并提供原生子资源流式桥接、大媒体 `206 Partial Content` 窗口流控、主线程 `EventSource`（SSE）保活、DSH 侧栏配置面板与云端一键引导绑定。
 
 ## 一键绑定与安装（推荐）
 
 前置要求：`Node.js >= 24.9.0`（与 `@deepseek-ai/dsh` 对齐）。
 
-在 Tiana 应用市场安装 **DSH Remote** 应用并打开后，页面向导会提供针对当前系统的绑定命令：
+在 Tiana 应用市场安装 **dsh-tiana-remote** 应用并打开后，页面向导会提供针对当前系统的绑定命令：
 
 ```sh
 npx --yes @tianacloud/dsh-remote@latest connect --app <appId>
@@ -22,7 +22,7 @@ npx --yes @tianacloud/dsh-remote@latest connect --app <appId>
 
 ## 侧栏管理面板与安全边界
 
-- **本地 DSH 侧栏（Tiana Remote）**：可视化查看在线状态与延迟、热开关远程访问、打开／复制／扫码访问远程 URL、默认掩码查看／复制／二次确认轮换 E2EE 配对密钥（轮换立即以 `4001 key_rotated` 断开所有远端会话）、管理活跃会话与单会话踢出、热更新 P2P／STUN 网络设置，以及一键修复重推静态壳层。
+- **本地 DSH 侧栏（`dsh-tiana-remote`）**：可视化查看在线状态与延迟、热开关远程访问、打开／复制／扫码访问远程 URL、默认掩码查看／复制／二次确认轮换 E2EE 配对密钥（轮换立即以 `4001 key_rotated` 断开所有远端会话）、管理活跃会话与单会话踢出、热更新 P2P／STUN 网络设置，以及一键修复重推静态壳层。
 - **远端隧道受限视图**：在托管网页中打开同一侧栏时自动切换为安全受限模式，展示当前通道（`P2P`／`Relay`）与 RTT，提供带清晰说明的「清除缓存并刷新」与「解除此设备绑定」操作，**不展示任何配对密钥或宿主管理操作**。
 - **双重管理路由隔离**：`HostBridge` 对经远端隧道发往 `/api/tiana-remote/admin` 及子路径的请求直接拦截返回 `403 Forbidden`，并在所有转发请求强制注入 `X-DSH-Remote-Tunnel: 1`；本机 `src/remote-api.js` 额外实施回环地址 + 非隧道头 + 本机 DSH `owner` 会话三重守卫。
 - **配对密钥存储策略**：解锁页默认勾选「在此受信任浏览器记住密钥」（勾选时保存在当前浏览器 `localStorage`，下次打开免输直连；取消勾选时密钥仅驻留当前标签页 JS 内存，绝不写入 `localStorage` 或 `sessionStorage`，刷新或关闭标签页即销毁；点击锁定通过跨标签页广播立即清空内存与本地存储）。

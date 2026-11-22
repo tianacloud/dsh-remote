@@ -1,6 +1,6 @@
-# DSH Remote 应用源码仓库
+# dsh-tiana-remote 应用源码仓库
 
-本目录是 `dsh-remote` 模板的前后端共享工程仓库，同时包含托管在 Tiana Web 的浏览器壳层（`web-src/`）与部署在 Tiana Function 的零依赖 Go Relay 后端服务（`functions/relay/`）。
+本目录是 `dsh-tiana-remote`（模板标识 `dsh-remote`）的前后端共享工程仓库，同时包含托管在 Tiana Web 的浏览器壳层（`web-src/`）与部署在 Tiana Function 的零依赖 Go Relay 后端服务（`functions/relay/`）。
 
 ## 工程结构
 
@@ -28,4 +28,4 @@ npm run build
 
 1. 将本仓库中的 `/functions/relay` 目录作为 Go Function 发布，并绑定到对应的 Tiana Web 应用。
 2. 确保 `remote-config.json` 中的 `functionId`、`webId` 以及 `functions/relay/main.go` 中的 `defaultWebID` 已替换为当前应用的实际 ID。
-3. 发布 `dist/` 为 Web 静态产物后，打开应用并按向导在个人电脑终端运行 `npx` 绑定命令即可写入动态策略并建立加密连接。
+3. 发布 `dist/` 为 Web 静态产物后，打开应用并按向导在个人电脑终端运行 `npx --yes @tianacloud/dsh-remote@latest connect --app <appId>` 绑定命令即可写入动态策略并建立加密连接。

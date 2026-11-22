@@ -1,2234 +1,2082 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark light">
-  <title>DSH Remote · 端到端加密远程工作台示例</title>
+  <meta name="color-scheme" content="light">
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('dsh-tiana-remote-preview-scheme');
+        if (saved === 'light' || saved === 'dark' || saved === 'light dark') {
+          document.querySelector('meta[name="color-scheme"]').content = saved;
+        }
+      } catch (_) {}
+    })();
+  </script>
+  <title>dsh-tiana-remote · DeepSeek Harness 远程访问设置</title>
   <style>
     :root {
-      color-scheme: dark;
-      --bg-dark: #0b1120;
-      --bg-elev-dark: #111a2e;
-      --card-dark: rgba(19, 27, 46, 0.96);
-      --surface-dark: #0f172a;
-      --text-dark: #f1f5f9;
-      --muted-dark: #94a3b8;
-      --border-dark: rgba(148, 163, 184, 0.22);
-      --border-strong-dark: rgba(148, 163, 184, 0.36);
+      /* Raw light/dark DSH design tokens (from DeepSeek Harness ui-theme) */
+      --bg-base-l: #ffffff;
+      --bg-base-d: #151517;
+      --bg-sidebar-l: #f9fafb;
+      --bg-sidebar-d: #1b1b1c;
+      --bg-surface-l: #ffffff;
+      --bg-surface-d: #212225;
+      --bg-subtle-l: #f5f6f8;
+      --bg-subtle-d: #292a2e;
+      --bg-hover-l: rgba(38, 49, 72, 0.06);
+      --bg-hover-d: rgba(255, 255, 255, 0.08);
+      --bg-active-l: #ebeef2;
+      --bg-active-d: #32343a;
+      --bg-code-l: #f7f8fa;
+      --bg-code-d: #18191c;
 
-      --bg-light: #f1f5f9;
-      --bg-elev-light: #e2e8f0;
-      --card-light: #ffffff;
-      --surface-light: #f8fafc;
-      --text-light: #0f172a;
-      --muted-light: #475569;
-      --border-light: rgba(15, 23, 42, 0.12);
-      --border-strong-light: rgba(15, 23, 42, 0.24);
+      --text-primary-l: #0f1115;
+      --text-primary-d: #f4f6f9;
+      --text-secondary-l: #61666b;
+      --text-secondary-d: #b5bcc6;
+      --text-tertiary-l: #81858c;
+      --text-tertiary-d: #8b929e;
 
-      --dsh-bg: var(--bg-dark);
-      --dsh-elev: var(--bg-elev-dark);
-      --dsh-card: var(--card-dark);
-      --dsh-code: var(--surface-dark);
-      --dsh-text: var(--text-dark);
-      --dsh-muted: var(--muted-dark);
-      --dsh-border: var(--border-dark);
-      --dsh-border-strong: var(--border-strong-dark);
+      --border-l1-l: rgba(15, 17, 21, 0.07);
+      --border-l1-d: rgba(255, 255, 255, 0.08);
+      --border-l2-l: rgba(15, 17, 21, 0.11);
+      --border-l2-d: rgba(255, 255, 255, 0.14);
+      --border-l3-l: rgba(15, 17, 21, 0.15);
+      --border-l3-d: rgba(255, 255, 255, 0.2);
 
-      --brand: #2563eb;
-      --brand-hi: #3b82f6;
-      --brand-soft: rgba(59, 130, 246, 0.14);
-      --brand-ring: rgba(96, 165, 250, 0.35);
-      --ok: #22c55e;
-      --ok-soft: rgba(34, 197, 94, 0.14);
-      --warn: #f59e0b;
-      --warn-soft: rgba(245, 158, 11, 0.16);
-      --danger: #ef4444;
-      --danger-soft: rgba(239, 68, 68, 0.15);
+      --brand-ink-l: #0f1115;
+      --brand-ink-d: #f4f6f9;
+      --brand-ink-fg-l: #ffffff;
+      --brand-ink-fg-d: #0f1115;
+      --brand-blue-l: #2563eb;
+      --brand-blue-d: #60a5fa;
+      --brand-blue-soft-l: rgba(65, 118, 230, 0.1);
+      --brand-blue-soft-d: rgba(96, 165, 250, 0.15);
+      --brand-blue-border-l: rgba(65, 118, 230, 0.24);
+      --brand-blue-border-d: rgba(96, 165, 250, 0.34);
 
-      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --ok-l: #16a34a;
+      --ok-d: #4ade80;
+      --ok-soft-l: rgba(34, 197, 94, 0.11);
+      --ok-soft-d: rgba(74, 222, 128, 0.14);
+      --warn-l: #d97706;
+      --warn-d: #fbbf24;
+      --warn-soft-l: rgba(245, 158, 11, 0.12);
+      --warn-soft-d: rgba(251, 191, 36, 0.16);
+      --danger-l: #dc2626;
+      --danger-d: #f87171;
+      --danger-soft-l: rgba(220, 38, 38, 0.08);
+      --danger-soft-d: rgba(248, 113, 113, 0.14);
+      --danger-border-l: rgba(220, 38, 38, 0.28);
+      --danger-border-d: rgba(248, 113, 113, 0.36);
 
-      accent-color: var(--brand-hi);
-      scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+      --spider-l: #061a36;
+      --spider-d: #e5edf9;
+      --wave-outer-l: #2563eb;
+      --wave-outer-d: #60a5fa;
+      --wave-inner-l: #38bdf8;
+      --wave-inner-d: #38bdf8;
+
+      --scroll-thumb-l: #d4d7dd;
+      --scroll-thumb-d: #454850;
+      --scroll-track-l: transparent;
+      --scroll-track-d: transparent;
+
+      /* Fallback defaults (light) */
+      --bg-base: var(--bg-base-l);
+      --bg-sidebar: var(--bg-sidebar-l);
+      --bg-surface: var(--bg-surface-l);
+      --bg-subtle: var(--bg-subtle-l);
+      --bg-hover: var(--bg-hover-l);
+      --bg-active: var(--bg-active-l);
+      --bg-code: var(--bg-code-l);
+      --text-primary: var(--text-primary-l);
+      --text-secondary: var(--text-secondary-l);
+      --text-tertiary: var(--text-tertiary-l);
+      --border-l1: var(--border-l1-l);
+      --border-l2: var(--border-l2-l);
+      --border-l3: var(--border-l3-l);
+      --brand-ink: var(--brand-ink-l);
+      --brand-ink-fg: var(--brand-ink-fg-l);
+      --brand-blue: var(--brand-blue-l);
+      --brand-blue-soft: var(--brand-blue-soft-l);
+      --brand-blue-border: var(--brand-blue-border-l);
+      --ok: var(--ok-l);
+      --ok-soft: var(--ok-soft-l);
+      --warn: var(--warn-l);
+      --warn-soft: var(--warn-soft-l);
+      --danger: var(--danger-l);
+      --danger-soft: var(--danger-soft-l);
+      --danger-border: var(--danger-border-l);
+      --spider: var(--spider-l);
+      --wave-outer: var(--wave-outer-l);
+      --wave-inner: var(--wave-inner-l);
+      --scroll-thumb: var(--scroll-thumb-l);
+      --scroll-track: var(--scroll-track-l);
+
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 14px;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Zen Hei", "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Noto Sans Mono CJK SC", monospace;
+
+      color-scheme: light dark;
+      accent-color: var(--brand-blue);
+      scrollbar-color: var(--scroll-thumb) var(--scroll-track);
     }
 
-    html[data-theme="light"] {
+    :root:has(> head > meta[name="color-scheme"][content="light"]) {
       color-scheme: light;
-      --dsh-bg: var(--bg-light);
-      --dsh-elev: var(--bg-elev-light);
-      --dsh-card: var(--card-light);
-      --dsh-code: var(--surface-light);
-      --dsh-text: var(--text-light);
-      --dsh-muted: var(--muted-light);
-      --dsh-border: var(--border-light);
-      --dsh-border-strong: var(--border-strong-light);
-      scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
+    }
+
+    :root:has(> head > meta[name="color-scheme"][content="dark"]) {
+      color-scheme: dark;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not(:has(> head > meta[name="color-scheme"][content="light"])) {
+        --bg-base: var(--bg-base-d);
+        --bg-sidebar: var(--bg-sidebar-d);
+        --bg-surface: var(--bg-surface-d);
+        --bg-subtle: var(--bg-subtle-d);
+        --bg-hover: var(--bg-hover-d);
+        --bg-active: var(--bg-active-d);
+        --bg-code: var(--bg-code-d);
+        --text-primary: var(--text-primary-d);
+        --text-secondary: var(--text-secondary-d);
+        --text-tertiary: var(--text-tertiary-d);
+        --border-l1: var(--border-l1-d);
+        --border-l2: var(--border-l2-d);
+        --border-l3: var(--border-l3-d);
+        --brand-ink: var(--brand-ink-d);
+        --brand-ink-fg: var(--brand-ink-fg-d);
+        --brand-blue: var(--brand-blue-d);
+        --brand-blue-soft: var(--brand-blue-soft-d);
+        --brand-blue-border: var(--brand-blue-border-d);
+        --ok: var(--ok-d);
+        --ok-soft: var(--ok-soft-d);
+        --warn: var(--warn-d);
+        --warn-soft: var(--warn-soft-d);
+        --danger: var(--danger-d);
+        --danger-soft: var(--danger-soft-d);
+        --danger-border: var(--danger-border-d);
+        --spider: var(--spider-d);
+        --wave-outer: var(--wave-outer-d);
+        --wave-inner: var(--wave-inner-d);
+        --scroll-thumb: var(--scroll-thumb-d);
+      }
+    }
+
+    @supports (color: light-dark(white, black)) {
+      :root {
+        --bg-base: light-dark(var(--bg-base-l), var(--bg-base-d));
+        --bg-sidebar: light-dark(var(--bg-sidebar-l), var(--bg-sidebar-d));
+        --bg-surface: light-dark(var(--bg-surface-l), var(--bg-surface-d));
+        --bg-subtle: light-dark(var(--bg-subtle-l), var(--bg-subtle-d));
+        --bg-hover: light-dark(var(--bg-hover-l), var(--bg-hover-d));
+        --bg-active: light-dark(var(--bg-active-l), var(--bg-active-d));
+        --bg-code: light-dark(var(--bg-code-l), var(--bg-code-d));
+        --text-primary: light-dark(var(--text-primary-l), var(--text-primary-d));
+        --text-secondary: light-dark(var(--text-secondary-l), var(--text-secondary-d));
+        --text-tertiary: light-dark(var(--text-tertiary-l), var(--text-tertiary-d));
+        --border-l1: light-dark(var(--border-l1-l), var(--border-l1-d));
+        --border-l2: light-dark(var(--border-l2-l), var(--border-l2-d));
+        --border-l3: light-dark(var(--border-l3-l), var(--border-l3-d));
+        --brand-ink: light-dark(var(--brand-ink-l), var(--brand-ink-d));
+        --brand-ink-fg: light-dark(var(--brand-ink-fg-l), var(--brand-ink-fg-d));
+        --brand-blue: light-dark(var(--brand-blue-l), var(--brand-blue-d));
+        --brand-blue-soft: light-dark(var(--brand-blue-soft-l), var(--brand-blue-soft-d));
+        --brand-blue-border: light-dark(var(--brand-blue-border-l), var(--brand-blue-border-d));
+        --ok: light-dark(var(--ok-l), var(--ok-d));
+        --ok-soft: light-dark(var(--ok-soft-l), var(--ok-soft-d));
+        --warn: light-dark(var(--warn-l), var(--warn-d));
+        --warn-soft: light-dark(var(--warn-soft-l), var(--warn-soft-d));
+        --danger: light-dark(var(--danger-l), var(--danger-d));
+        --danger-soft: light-dark(var(--danger-soft-l), var(--danger-soft-d));
+        --danger-border: light-dark(var(--danger-border-l), var(--danger-border-d));
+        --spider: light-dark(var(--spider-l), var(--spider-d));
+        --wave-outer: light-dark(var(--wave-outer-l), var(--wave-outer-d));
+        --wave-inner: light-dark(var(--wave-inner-l), var(--wave-inner-d));
+        --scroll-thumb: light-dark(var(--scroll-thumb-l), var(--scroll-thumb-d));
+      }
+    }
+
+    @supports not (scrollbar-color: auto) {
+      .scroller { scrollbar-width: auto; }
+      .scroller::-webkit-scrollbar { width: 6px; height: 6px; }
+      .scroller::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }
+      .scroller::-webkit-scrollbar-track { background: transparent; }
     }
 
     *, *::before, *::after { box-sizing: border-box; }
-    [hidden] { display: none !important; }
 
     html, body {
       margin: 0;
-      padding: 0;
       height: 100%;
-      background: var(--dsh-bg);
-      color: var(--dsh-text);
+      overflow: hidden;
+      background: var(--bg-base);
+      color: var(--text-primary);
       font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.5;
       -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
-    body {
+    button, input { font-family: inherit; }
+
+    /* DeepSeek Harness AppFrame Layout */
+    .dsh-frame {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      background: var(--bg-base);
+    }
+
+    /* Sidebar (authentic DSH SidebarRoot) */
+    .dsh-sidebar {
       display: flex;
       flex-direction: column;
-      min-height: 100vh;
-      overflow-x: hidden;
+      height: 100%;
+      min-width: 0;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-l2);
+      padding: 8px 10px 10px;
+      user-select: none;
     }
 
-    /* Subtle engineering backdrop */
-    .app-bg {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      z-index: 0;
-      background:
-        radial-gradient(640px 360px at 14% 12%, rgba(37, 99, 235, 0.14), transparent 70%),
-        radial-gradient(520px 320px at 88% 85%, rgba(16, 185, 129, 0.08), transparent 70%);
-    }
-    html[data-theme="light"] .app-bg {
-      background:
-        radial-gradient(640px 360px at 14% 12%, rgba(37, 99, 235, 0.07), transparent 70%),
-        radial-gradient(520px 320px at 88% 85%, rgba(16, 185, 129, 0.05), transparent 70%);
-    }
-
-    /* Top Demo Chrome & Flow Stepper */
-    .demo-topbar {
-      position: sticky;
-      top: 0;
-      z-index: 40;
+    .dsh-logo-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-      padding: 9px 16px;
-      background: var(--dsh-card);
-      border-bottom: 1px solid var(--dsh-border);
-      backdrop-filter: blur(12px);
+      height: 46px;
+      padding: 0 4px 0 6px;
+      flex: none;
     }
 
-    .demo-brand-group {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-width: 0;
-      flex-wrap: wrap;
-    }
-
-    .brand-mark {
+    .dsh-brand {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      font-weight: 700;
-      font-size: 14px;
+      min-width: 0;
+      color: var(--text-primary);
+      text-decoration: none;
+    }
+
+    .dsh-brand-whale {
+      width: 22px;
+      height: 22px;
+      color: #4176e6;
+      flex: none;
+    }
+
+    .dsh-brand-wordmark {
+      font-size: 15px;
+      font-weight: 650;
       letter-spacing: -0.01em;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
-    .brand-icon {
-      width: 24px;
-      height: 24px;
-      border-radius: 7px;
-      background: linear-gradient(135deg, #2563eb, #0ea5e9);
-      display: grid;
-      place-items: center;
-      color: #fff;
-      flex: none;
-    }
-
-    .demo-pill {
+    .dsh-icon-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-      line-height: 1.3;
-      color: var(--dsh-muted);
-      background: var(--dsh-code);
-      border: 1px solid var(--dsh-border);
-      max-width: 100%;
+      justify-content: center;
+      cursor: pointer;
     }
-    .demo-pill-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--brand-hi);
+
+    .dsh-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+    .dsh-new-session {
+      margin: 4px 2px 10px;
+      height: 36px;
+      padding: 0 12px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-l2);
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      font-size: 13.5px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      box-shadow: 0 1px 2px rgba(15, 17, 21, 0.04);
       flex: none;
     }
 
-    .demo-controls {
+    .dsh-new-session:hover { background: var(--bg-subtle); }
+
+    .dsh-new-session-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .dsh-kbd {
+      font-size: 11px;
+      color: var(--text-tertiary);
+      font-family: var(--font-mono);
+      padding: 1px 5px;
+      border-radius: 5px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-l1);
+    }
+
+    .dsh-sidebar-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 2px 0;
+    }
+
+    .dsh-nav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .dsh-nav-row {
+      width: 100%;
+      min-height: 34px;
+      padding: 6px 10px;
+      border: none;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--text-primary);
+      font-size: 13.5px;
+      font-weight: 450;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .dsh-nav-row:hover { background: var(--bg-hover); }
+
+    .dsh-nav-row.is-active {
+      background: var(--bg-active);
+      font-weight: 600;
+    }
+
+    .dsh-nav-glyph {
+      width: 18px;
+      height: 18px;
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-secondary);
+    }
+
+    .dsh-nav-row.is-active .dsh-nav-glyph { color: var(--text-primary); }
+
+    .dsh-nav-label {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dsh-live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 0 3px var(--ok-soft);
+      flex: none;
+    }
+
+    .dsh-live-dot.is-paused {
+      background: var(--text-tertiary);
+      box-shadow: none;
+    }
+
+    .dsh-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 10px 4px;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text-tertiary);
+      letter-spacing: 0.02em;
+    }
+
+    .dsh-ws-group {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border-l1);
+    }
+
+    .dsh-ws-row {
       display: flex;
       align-items: center;
       gap: 8px;
-      flex-wrap: wrap;
-      min-width: 0;
-      max-width: 100%;
-    }
-
-    .stepper {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      padding: 3px;
-      border-radius: 10px;
-      background: var(--dsh-code);
-      border: 1px solid var(--dsh-border);
-      overflow-x: auto;
-      max-width: 100%;
-    }
-
-    .step-btn {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 5px 10px;
-      border-radius: 7px;
-      border: 1px solid transparent;
+      padding: 6px 10px;
+      border-radius: 9px;
+      border: none;
       background: transparent;
-      color: var(--dsh-muted);
-      font-size: 12px;
-      font-weight: 500;
+      color: var(--text-secondary);
+      font-size: 13px;
       cursor: pointer;
+      text-align: left;
+    }
+
+    .dsh-ws-row:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+    .dsh-ws-title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .dsh-ws-time {
+      font-size: 11px;
+      color: var(--text-tertiary);
       flex: none;
     }
-    .step-btn:hover { color: var(--dsh-text); }
-    .step-btn[aria-current="step"] {
-      background: var(--brand);
-      color: #fff;
-      border-color: var(--brand);
-    }
-    .step-num {
-      display: inline-grid;
-      place-items: center;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      font-size: 10px;
-      font-weight: 700;
-      background: rgba(148, 163, 184, 0.22);
-    }
-    .step-btn[aria-current="step"] .step-num {
-      background: rgba(255, 255, 255, 0.22);
+
+    .dsh-sidebar-foot {
+      flex: none;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-l1);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
 
-    /* Shared Buttons & Controls */
-    .btn {
+    .dsh-host-chip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 10px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-l1);
+      font-size: 12px;
+    }
+
+    .dsh-host-chip-main {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .dsh-host-chip-name {
+      font-weight: 600;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dsh-host-chip-meta {
+      font-size: 11px;
+      color: var(--text-tertiary);
+    }
+
+    .dsh-foot-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .dsh-theme-btn {
+      flex: 1;
+      height: 32px;
+      padding: 0 10px;
+      border-radius: 9px;
+      border: 1px solid var(--border-l1);
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
-      padding: 8px 13px;
-      border-radius: 9px;
-      font-size: 13px;
-      font-weight: 500;
-      line-height: 1.2;
       cursor: pointer;
-      border: 1px solid var(--dsh-border-strong);
-      background: transparent;
-      color: var(--dsh-text);
-      white-space: nowrap;
-      transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
     }
-    .btn:hover:not(:disabled) {
-      background: rgba(148, 163, 184, 0.12);
-    }
-    .btn:active:not(:disabled) { transform: translateY(1px); }
-    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
-    .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
-    .btn-primary {
-      background: var(--brand);
-      border-color: var(--brand);
-      color: #fff;
-    }
-    .btn-primary:hover:not(:disabled) { background: #1d4ed8; border-color: #1d4ed8; }
-    .btn-emerald {
-      background: rgba(16, 185, 129, 0.16);
-      border-color: rgba(52, 211, 153, 0.45);
-      color: #34d399;
-    }
-    html[data-theme="light"] .btn-emerald {
-      background: rgba(16, 185, 129, 0.12);
-      color: #047857;
-      border-color: rgba(5, 150, 105, 0.4);
-    }
-    .btn-emerald:hover:not(:disabled) { background: rgba(16, 185, 129, 0.24); }
-    .btn-danger {
-      background: var(--danger-soft);
-      border-color: rgba(248, 113, 113, 0.45);
-      color: #f87171;
-    }
-    html[data-theme="light"] .btn-danger { color: #dc2626; }
-    .btn-danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.24); }
 
-    /* Main Stage */
-    main.stage {
-      position: relative;
-      z-index: 1;
-      flex: 1;
+    .dsh-theme-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+    /* Center Workspace Panel */
+    .dsh-center {
       display: flex;
       flex-direction: column;
+      min-width: 0;
       min-height: 0;
+      height: 100%;
+      background: var(--bg-base);
     }
 
-    .view { display: none; flex: 1; min-height: 0; }
-    .view.is-active { display: flex; flex-direction: column; }
-
-    /* Shell Views (Onboarding, Unlock, Offline) */
-    .shell-center {
-      flex: 1;
+    .dsh-topbar {
+      flex: none;
+      height: 56px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--border-l1);
       display: flex;
       align-items: center;
-      justify-content: center;
-      padding: 24px 20px 28px;
+      justify-content: space-between;
+      gap: 16px;
+      background: var(--bg-base);
     }
 
-    .onboarding-grid {
-      width: min(1140px, 100%);
+    .dsh-topbar-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .dsh-plugin-emblem {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: linear-gradient(145deg, #ffffff 0%, #eef5ff 100%);
+      border: 1px solid rgba(37, 99, 235, 0.16);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    }
+
+    .dsh-topbar-titles {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .dsh-page-title {
+      margin: 0;
+      font-size: 15.5px;
+      font-weight: 650;
+      letter-spacing: -0.01em;
+      color: var(--text-primary);
+      white-space: nowrap;
+    }
+
+    .dsh-tag-e2ee {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 999px;
+      color: var(--brand-blue);
+      background: var(--brand-blue-soft);
+      border: 1px solid var(--brand-blue-border);
+      white-space: nowrap;
+    }
+
+    .dsh-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-l1);
+      white-space: nowrap;
+    }
+
+    /* Mode Switcher Segmented Control (DSH Tabs style) */
+    .dsh-mode-tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 3px;
+      border-radius: 10px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-l1);
+      flex: none;
+    }
+
+    .dsh-mode-tab {
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 5px 11px;
+      border-radius: 7px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.14s ease, color 0.14s ease;
+    }
+
+    .dsh-mode-tab:hover { color: var(--text-primary); }
+
+    .dsh-mode-tab[aria-selected="true"] {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      font-weight: 600;
+      border-color: var(--border-l2);
+      box-shadow: 0 1px 2px rgba(15, 17, 21, 0.06);
+    }
+
+    /* Main Canvas */
+    .dsh-main {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 15px 26px 16px;
+    }
+
+    .dsh-wrap {
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .dsh-view { display: none; flex-direction: column; gap: 12px; }
+    .dsh-view.is-active { display: flex; }
+
+    /* Settings Cards (authentic DSH clean card geometry) */
+    .dsh-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-l2);
+      border-radius: var(--radius-lg);
+      padding: 15px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 11px;
+    }
+
+    .dsh-grid-2 {
       display: grid;
       grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
-      gap: 20px;
+      gap: 12px;
       align-items: stretch;
     }
 
-    .dsh-shell-card {
-      width: 100%;
-      background: var(--dsh-card);
-      border: 1px solid var(--dsh-border);
-      border-radius: 18px;
-      padding: 26px;
-      box-shadow: 0 22px 54px rgba(2, 6, 23, 0.26);
-      display: flex;
-      flex-direction: column;
-      gap: 15px;
-      min-width: 0;
-    }
-    .dsh-shell-card.is-narrow {
-      width: min(600px, 100%);
-    }
-
-    .dsh-shell-badge-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .dsh-shell-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--brand-hi);
-      letter-spacing: 0.02em;
-    }
-    .sec-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 9px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 600;
-      font-family: var(--font-mono);
-      background: var(--ok-soft);
-      border: 1px solid rgba(34, 197, 94, 0.35);
-      color: #4ade80;
-    }
-    html[data-theme="light"] .sec-chip { color: #15803d; }
-
-    .dsh-shell-title {
-      margin: 0;
-      font-size: 22px;
-      font-weight: 700;
-      line-height: 1.28;
-      letter-spacing: -0.015em;
-    }
-    .dsh-shell-sub {
-      margin: 0;
-      font-size: 14px;
-      line-height: 1.6;
-      color: var(--dsh-muted);
-    }
-
-    /* Accessible Tabs (modern-web-guidance compliant: single row, non-color underline indicator) */
-    .dsh-shell-tabs {
-      display: flex;
-      gap: 8px;
-      overflow-x: auto;
-      border-bottom: 1px solid var(--dsh-border);
-      padding-bottom: 2px;
-    }
-    .dsh-shell-tab {
-      position: relative;
-      flex: none;
-      padding: 8px 13px 10px;
-      border-radius: 8px 8px 0 0;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      border: none;
-      background: transparent;
-      color: var(--dsh-muted);
-      white-space: nowrap;
-    }
-    .dsh-shell-tab:hover { color: var(--dsh-text); }
-    .dsh-shell-tab[aria-selected="true"] {
-      color: var(--brand-hi);
-    }
-    .dsh-shell-tab[aria-selected="true"]::after {
-      content: "";
-      position: absolute;
-      inset: auto 0 0 0;
-      border-block-end: 3px solid var(--brand-hi);
-    }
-
-    .dsh-shell-codebox {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 11px 13px;
-      border-radius: 11px;
-      background: var(--dsh-code);
-      border: 1px solid var(--dsh-border);
-      min-width: 0;
-    }
-    .dsh-shell-code {
-      flex: 1;
-      min-width: 0;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font: 12px/1.5 var(--font-mono);
-      color: var(--dsh-text);
-    }
-
-    .dsh-shell-wait {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 11px 14px;
-      border-radius: 11px;
-      background: var(--brand-soft);
-      border: 1px solid rgba(59, 130, 246, 0.3);
-      font-size: 13px;
-      line-height: 1.45;
-      transition: background-color 0.25s ease, border-color 0.25s ease;
-    }
-    .dsh-shell-wait.is-online {
-      background: var(--ok-soft);
-      border-color: rgba(34, 197, 94, 0.45);
-    }
-    .dsh-shell-pulse {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background: var(--brand-hi);
-      flex: none;
-      animation: dsh-pulse 1.5s infinite;
-    }
-    .dsh-shell-wait.is-online .dsh-shell-pulse {
-      background: var(--ok);
-      animation: none;
-      box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.25);
-    }
-    @keyframes dsh-pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.78); }
-    }
-
-    .action-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-
-    .dsh-shell-details {
-      font-size: 13px;
-      color: var(--dsh-muted);
-      border-top: 1px solid var(--dsh-border);
-      padding-top: 12px;
-    }
-    .dsh-shell-details summary {
-      cursor: pointer;
-      font-weight: 500;
-      color: var(--dsh-text);
-    }
-    .dsh-shell-details p { margin: 8px 0 0; line-height: 1.55; }
-
-    /* Right Companion Panel on Onboarding */
-    .preview-card {
-      background: var(--dsh-card);
-      border: 1px solid var(--dsh-border);
-      border-radius: 18px;
-      padding: 22px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      box-shadow: 0 22px 54px rgba(2, 6, 23, 0.22);
-      min-width: 0;
-    }
-
-    .topo-strip {
+    .dsh-grid-2-eq {
       display: grid;
-      grid-template-columns: 1fr auto 1fr auto 1fr;
-      align-items: center;
-      gap: 8px;
-      padding: 12px;
-      border-radius: 12px;
-      background: var(--dsh-code);
-      border: 1px solid var(--dsh-border);
-    }
-    .topo-node {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
-      gap: 4px;
-      padding: 8px 6px;
-      border-radius: 9px;
-      background: var(--dsh-card);
-      border: 1px solid var(--dsh-border);
-      min-width: 0;
-    }
-    .topo-node.is-active {
-      border-color: rgba(34, 197, 94, 0.55);
-      box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.14);
-    }
-    .topo-node-title { font-size: 12px; font-weight: 600; white-space: nowrap; }
-    .topo-node-sub { font-size: 11px; color: var(--dsh-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-    .topo-link {
-      font-size: 11px;
-      font-family: var(--font-mono);
-      color: var(--brand-hi);
-      white-space: nowrap;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+      align-items: stretch;
     }
 
-    .term-box {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      border-radius: 12px;
-      overflow: hidden;
-      background: #070d1a;
-      border: 1px solid rgba(148, 163, 184, 0.22);
-      color: #e2e8f0;
-      font-family: var(--font-mono);
-      font-size: 12px;
-      min-height: 210px;
-    }
-    .term-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px;
-      background: rgba(30, 41, 59, 0.72);
-      border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-      font-size: 11px;
-      color: #94a3b8;
-    }
-    .term-dots { display: flex; gap: 6px; }
-    .term-dots span { width: 9px; height: 9px; border-radius: 50%; background: rgba(148, 163, 184, 0.35); }
-    .term-body {
-      padding: 12px 14px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      line-height: 1.5;
-      overflow-x: auto;
-    }
-    .t-dim { color: #64748b; }
-    .t-cmd { color: #93c5fd; }
-    .t-ok { color: #4ade80; }
-    .t-warn { color: #fbbf24; }
-
-    .teaser-foot {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-      padding-top: 10px;
-      border-top: 1px solid var(--dsh-border);
-      font-size: 12px;
-      color: var(--dsh-muted);
-    }
-
-    /* Form Controls (Unlock) */
-    .dsh-shell-input-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    .dsh-shell-input {
-      flex: 1;
-      min-width: 180px;
-      padding: 11px 13px;
-      border-radius: 9px;
-      border: 1px solid var(--dsh-border-strong);
-      background: var(--dsh-code);
-      color: var(--dsh-text);
-      font: 13px var(--font-mono);
-    }
-    .dsh-shell-input:focus {
-      outline: 2px solid var(--brand-hi);
-      outline-offset: 1px;
-    }
-    .dsh-shell-input[aria-invalid="true"] {
-      border-color: var(--danger);
-    }
-    .dsh-shell-err {
-      padding: 10px 12px;
-      border-radius: 9px;
-      font-size: 13px;
-      line-height: 1.45;
-      background: var(--danger-soft);
-      border: 1px solid rgba(248, 113, 113, 0.45);
-      color: #f87171;
-    }
-    html[data-theme="light"] .dsh-shell-err { color: #b91c1c; }
-
-    .dsh-shell-info {
-      padding: 10px 12px;
-      border-radius: 9px;
-      font-size: 13px;
-      line-height: 1.45;
-      background: var(--brand-soft);
-      border: 1px solid var(--brand-ring);
-      color: var(--dsh-text);
-    }
-
-    .dsh-shell-check {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 13px;
-      color: var(--dsh-muted);
-      cursor: pointer;
-    }
-
-    /* Workbench View (Step 3) */
-    .wb-shell {
-      flex: 1;
-      display: grid;
-      grid-template-columns: 68px minmax(0, 1fr);
-      min-height: 0;
-      height: calc(100vh - 54px);
-    }
-
-    .wb-rail {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 8px;
-      padding: 14px 8px;
-      background: var(--dsh-card);
-      border-right: 1px solid var(--dsh-border);
-    }
-    .rail-btn {
-      position: relative;
-      width: 52px;
-      padding: 8px 4px;
-      border-radius: 10px;
-      border: 1px solid transparent;
-      background: transparent;
-      color: var(--dsh-muted);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 4px;
-      font-size: 10px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .rail-btn:hover { background: rgba(148, 163, 184, 0.1); color: var(--dsh-text); }
-    .rail-btn[aria-selected="true"] {
-      background: var(--brand-soft);
-      border-color: var(--brand-ring);
-      color: var(--brand-hi);
-    }
-    .rail-dot {
-      position: absolute;
-      top: 6px;
-      right: 8px;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--ok);
-      box-shadow: 0 0 0 2px var(--dsh-card);
-    }
-    .rail-dot.is-relay { background: var(--warn); }
-
-    .wb-content {
-      min-width: 0;
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    /* Chat Subview */
-    .chat-layout {
-      flex: 1;
-      display: grid;
-      grid-template-columns: 272px minmax(0, 1fr);
-      min-height: 0;
-      overflow: hidden;
-    }
-
-    .session-pane {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      padding: 14px;
-      background: var(--dsh-card);
-      border-right: 1px solid var(--dsh-border);
-      min-height: 0;
-      overflow-y: auto;
-    }
-    .pane-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-    .pane-title { font-size: 13px; font-weight: 650; margin: 0; }
-    .search-input {
-      width: 100%;
-      padding: 8px 10px;
-      border-radius: 8px;
-      border: 1px solid var(--dsh-border);
-      background: var(--dsh-code);
-      color: var(--dsh-text);
-      font-size: 12px;
-    }
-    .session-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .session-item {
-      text-align: left;
-      width: 100%;
-      padding: 10px 11px;
-      border-radius: 10px;
-      border: 1px solid transparent;
-      background: transparent;
-      color: var(--dsh-text);
-      cursor: pointer;
-      display: grid;
-      gap: 3px;
-    }
-    .session-item:hover { background: rgba(148, 163, 184, 0.08); }
-    .session-item.is-active {
-      background: var(--brand-soft);
-      border-color: var(--brand-ring);
-    }
-    .session-name { font-size: 13px; font-weight: 600; }
-    .session-path { font-size: 11px; color: var(--dsh-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .session-meta { font-size: 11px; color: var(--dsh-muted); display: flex; justify-content: space-between; }
-
-    .chat-main {
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      min-height: 0;
-      background: var(--dsh-bg);
-    }
-    .chat-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      flex-wrap: wrap;
-      padding: 12px 18px;
-      border-bottom: 1px solid var(--dsh-border);
-      background: var(--dsh-card);
-    }
-    .chat-project { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-    .chat-project strong { font-size: 14px; }
-    .mono-tag {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      padding: 3px 8px;
-      border-radius: 6px;
-      background: var(--dsh-code);
-      border: 1px solid var(--dsh-border);
-      color: var(--dsh-muted);
-    }
-
-    .conn-pill-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      padding: 5px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      background: var(--dsh-code);
-      border: 1px solid var(--dsh-border-strong);
-      color: var(--dsh-text);
-    }
-    .conn-pill-btn:hover { border-color: var(--brand-hi); }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--ok);
-      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.22);
-      flex: none;
-    }
-    .status-dot.is-relay {
-      background: var(--warn);
-      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.22);
-    }
-
-    .chat-messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }
-
-    .msg {
-      max-width: 820px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .msg-role {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--dsh-muted);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .msg-bubble {
-      padding: 12px 14px;
-      border-radius: 12px;
-      font-size: 13.5px;
-      line-height: 1.6;
-      border: 1px solid var(--dsh-border);
-      background: var(--dsh-card);
-    }
-    .msg.is-user .msg-bubble {
-      background: var(--brand-soft);
-      border-color: var(--brand-ring);
-    }
-    .tool-row {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      margin-bottom: 6px;
-    }
-    .tool-chip {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      padding: 2px 7px;
-      border-radius: 6px;
-      background: var(--dsh-code);
-      border: 1px solid var(--dsh-border);
-      color: var(--brand-hi);
-    }
-    .diff-box {
-      margin-top: 8px;
-      border-radius: 9px;
-      overflow-x: auto;
-      background: #070d1a;
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      padding: 10px 12px;
-      font: 12px/1.55 var(--font-mono);
-      color: #cbd5e1;
-      white-space: pre;
-    }
-    .diff-add { color: #4ade80; }
-    .diff-del { color: #f87171; }
-    .diff-head { color: #93c5fd; }
-
-    .composer-wrap {
-      padding: 12px 18px 16px;
-      border-top: 1px solid var(--dsh-border);
-      background: var(--dsh-card);
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .prompt-chips {
-      display: flex;
-      gap: 6px;
-      overflow-x: auto;
-      padding-bottom: 2px;
-    }
-    .chip-btn {
-      flex: none;
-      padding: 5px 10px;
-      border-radius: 999px;
-      font-size: 12px;
-      cursor: pointer;
-      border: 1px solid var(--dsh-border);
-      background: var(--dsh-code);
-      color: var(--dsh-muted);
-    }
-    .chip-btn:hover { color: var(--dsh-text); border-color: var(--brand-hi); }
-
-    .composer-form {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-    .composer-input {
-      flex: 1;
-      min-width: 0;
-      padding: 10px 13px;
-      border-radius: 10px;
-      border: 1px solid var(--dsh-border-strong);
-      background: var(--dsh-code);
-      color: var(--dsh-text);
-      font-size: 13.5px;
-    }
-
-    /* Tiana Remote Panel Subview (1:1 client.js Remote Tunnel Mode) */
-    .dshr-root {
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px 20px;
-    }
-    .dshr-wrap {
-      max-width: 860px;
-      margin: 0 auto;
-      display: grid;
-      gap: 16px;
-    }
-    .dshr-header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 14px;
-      flex-wrap: wrap;
-    }
-    .dshr-title { margin: 0; font-size: 20px; font-weight: 650; }
-    .dshr-sub { margin: 4px 0 0; font-size: 13px; color: var(--dsh-muted); }
-    .dshr-card {
-      background: var(--dsh-card);
-      border: 1px solid var(--dsh-border);
-      border-radius: 14px;
-      padding: 18px 20px;
-      display: grid;
-      gap: 14px;
-    }
-    .dshr-card-head {
+    .dsh-card-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
     }
-    .dshr-card-title { margin: 0; font-size: 15px; font-weight: 650; }
-    .dshr-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .dshr-badge {
-      display: inline-flex;
+
+    .dsh-card-title {
+      margin: 0;
+      font-size: 14.5px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 5px 11px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 500;
-      background: var(--dsh-code);
-      border: 1px solid var(--dsh-border);
+      gap: 7px;
     }
-    .dshr-metrics {
+
+    .dsh-card-sub {
+      margin: 0;
+      font-size: 12.5px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    .dsh-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Telemetry Strip inside Hero Card */
+    .dsh-metrics {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 10px;
     }
-    .metric-box {
-      padding: 12px 14px;
-      border-radius: 10px;
-      background: var(--dsh-code);
-      border: 1px solid var(--dsh-border);
-      display: grid;
-      gap: 4px;
-    }
-    .metric-label { font-size: 11px; color: var(--dsh-muted); }
-    .metric-val { font-size: 14px; font-weight: 650; font-family: var(--font-mono); }
 
-    .dshr-notice {
-      padding: 12px 14px;
+    .dsh-metric {
+      padding: 10px 12px;
       border-radius: 10px;
-      font-size: 13px;
-      line-height: 1.55;
-      background: var(--brand-soft);
-      border: 1px solid var(--brand-ring);
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-l1);
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
     }
 
-    /* Transient Reconnect Capsule & Toast */
-    #dsh-remote-reconnect-banner {
-      position: fixed;
-      top: 62px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 60;
-      display: none;
+    .dsh-metric-label {
+      font-size: 11.5px;
+      color: var(--text-tertiary);
+      display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 8px 14px;
-      border-radius: 999px;
-      font-size: 13px;
-      background: rgba(15, 23, 42, 0.92);
-      color: #f8fafc;
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-      backdrop-filter: blur(10px);
-      max-width: calc(100vw - 24px);
+      justify-content: space-between;
+      gap: 6px;
     }
-    #dsh-remote-reconnect-banner.is-visible { display: flex; }
 
-    .demo-toast {
-      position: fixed;
-      right: 16px;
-      bottom: 16px;
-      z-index: 65;
-      padding: 9px 14px;
+    .dsh-metric-val {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .dsh-metric-mono {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+    }
+
+    .dsh-link-btn {
+      border: none;
+      background: none;
+      padding: 0;
+      color: var(--brand-blue);
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .dsh-link-btn:hover { text-decoration: underline; }
+
+    /* Monospace URL / Key Display */
+    .dsh-mono-box {
+      flex: 1;
+      min-width: 180px;
+      padding: 8px 12px;
+      border-radius: 9px;
+      background: var(--bg-code);
+      border: 1px solid var(--border-l2);
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Buttons (DSH crisp neutral & primary ink style) */
+    .dsh-btn {
+      height: 33px;
+      padding: 0 12px;
+      border-radius: 9px;
+      border: 1px solid var(--border-l2);
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      font-size: 12.5px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s ease, border-color 0.12s ease;
+    }
+
+    .dsh-btn:hover:not(:disabled) { background: var(--bg-subtle); border-color: var(--border-l3); }
+    .dsh-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .dsh-btn-primary {
+      background: var(--brand-ink);
+      border-color: var(--brand-ink);
+      color: var(--brand-ink-fg);
+    }
+
+    .dsh-btn-primary:hover:not(:disabled) { opacity: 0.9; background: var(--brand-ink); }
+
+    .dsh-btn-blue {
+      background: var(--brand-blue);
+      border-color: var(--brand-blue);
+      color: #ffffff;
+    }
+
+    .dsh-btn-blue:hover:not(:disabled) { opacity: 0.92; background: var(--brand-blue); }
+
+    .dsh-btn-danger {
+      background: var(--danger-soft);
+      border-color: var(--danger-border);
+      color: var(--danger);
+    }
+
+    .dsh-btn-danger:hover:not(:disabled) { filter: brightness(0.96); }
+
+    .dsh-btn-sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+
+    /* Native Switch styling */
+    .dsh-switch-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    .dsh-switch {
+      appearance: none;
+      width: 36px;
+      height: 20px;
+      border-radius: 999px;
+      background: var(--border-l3);
+      position: relative;
+      cursor: pointer;
+      margin: 0;
+      transition: background 0.16s ease;
+      flex: none;
+    }
+
+    .dsh-switch::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+      transition: transform 0.16s ease;
+    }
+
+    .dsh-switch:checked { background: var(--brand-blue); }
+    .dsh-switch:checked::after { transform: translateX(16px); }
+
+    /* Pills & Badges */
+    .dsh-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 11.5px;
+      font-weight: 500;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-l1);
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+
+    .dsh-badge-ok {
+      color: var(--ok);
+      background: var(--ok-soft);
+      border-color: transparent;
+      font-weight: 600;
+    }
+
+    .dsh-badge-blue {
+      color: var(--brand-blue);
+      background: var(--brand-blue-soft);
+      border-color: var(--brand-blue-border);
+      font-weight: 600;
+    }
+
+    /* Session list */
+    .dsh-session-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .dsh-session-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 11px;
+      border-radius: 10px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-l1);
+    }
+
+    .dsh-session-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .dsh-session-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dsh-session-sub {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+    }
+
+    /* Form fields */
+    .dsh-field-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .dsh-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .dsh-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .dsh-input {
+      height: 34px;
+      width: 100%;
+      padding: 0 11px;
+      border-radius: 9px;
+      border: 1px solid var(--border-l2);
+      background: var(--bg-code);
+      color: var(--text-primary);
+      font-size: 13px;
+    }
+
+    .dsh-input:focus {
+      outline: 2px solid var(--brand-blue);
+      outline-offset: -1px;
+    }
+
+    .dsh-check-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    /* Action rows (Clear Cache / Unbind Device) */
+    .dsh-action-list {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+
+    .dsh-action-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-l1);
+    }
+
+    .dsh-action-copy {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .dsh-action-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .dsh-action-desc {
+      font-size: 11.5px;
+      line-height: 1.48;
+      color: var(--text-secondary);
+    }
+
+    .dsh-notice {
+      padding: 10px 12px;
       border-radius: 10px;
       font-size: 12.5px;
-      background: rgba(15, 23, 42, 0.94);
-      color: #f8fafc;
-      border: 1px solid rgba(96, 165, 250, 0.4);
-      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+      line-height: 1.5;
+      color: var(--text-primary);
+      background: var(--brand-blue-soft);
+      border: 1px solid var(--brand-blue-border);
+    }
+
+    /* Onboarding wizard steps */
+    .dsh-step-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .dsh-step-card {
+      padding: 11px 12px;
+      border-radius: 10px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-l1);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .dsh-step-num {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--brand-blue);
+      font-family: var(--font-mono);
+    }
+
+    .dsh-step-name {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .dsh-step-desc {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      line-height: 1.45;
+    }
+
+    .dsh-wait-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 11px 14px;
+      border-radius: 10px;
+      background: var(--brand-blue-soft);
+      border: 1px solid var(--brand-blue-border);
+      font-size: 12.5px;
+    }
+
+    .dsh-pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--brand-blue);
+      animation: dsh-pulse 1.5s infinite;
+      flex: none;
+    }
+
+    @keyframes dsh-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.82); }
+    }
+
+    /* Topology Diagram inside Modal / Remote View */
+    .dsh-topo {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      align-items: center;
+      gap: 8px;
+      padding: 14px;
+      border-radius: 12px;
+      background: var(--bg-subtle);
+      border: 1px solid var(--border-l1);
+    }
+
+    .dsh-topo-node {
+      padding: 10px;
+      border-radius: 10px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-l2);
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .dsh-topo-title { font-size: 12.5px; font-weight: 650; color: var(--text-primary); }
+    .dsh-topo-sub { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); }
+
+    .dsh-topo-link {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--brand-blue);
+      white-space: nowrap;
+    }
+
+    /* Native Modal <dialog> (modern-web-guidance compliant) */
+    dialog.dsh-dialog {
+      padding: 20px 22px;
+      border-radius: 16px;
+      max-width: 460px;
+      width: calc(100vw - 32px);
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      border: 1px solid var(--border-l2);
+      box-shadow: 0 24px 60px rgba(15, 17, 21, 0.24);
+    }
+
+    dialog.dsh-dialog:modal { overscroll-behavior: contain; }
+
+    dialog.dsh-dialog::backdrop {
+      background: rgba(15, 17, 21, 0.45);
+      overflow: hidden;
+      overscroll-behavior: contain;
+    }
+
+    .dsh-dialog-title {
+      margin: 0 0 8px;
+      font-size: 15.5px;
+      font-weight: 650;
+    }
+
+    .dsh-dialog-body {
+      margin: 0 0 16px;
+      font-size: 13px;
+      line-height: 1.55;
+      color: var(--text-secondary);
+    }
+
+    .dsh-dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    /* Toast */
+    .dsh-toast {
+      position: fixed;
+      left: 50%;
+      bottom: 20px;
+      transform: translateX(-50%) translateY(16px);
       opacity: 0;
       pointer-events: none;
-      transform: translateY(6px);
-      transition: opacity 0.18s ease, transform 0.18s ease;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: #1f2329;
+      color: #ffffff;
+      font-size: 12.5px;
+      font-weight: 500;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+      transition: opacity 0.16s ease, transform 0.16s ease;
+      z-index: 99;
     }
-    .demo-toast.is-show { opacity: 1; transform: translateY(0); }
 
-    /* Responsive Breakpoints (1280px desktop -> 390px mobile) */
-    @media (max-width: 960px) {
-      .onboarding-grid { grid-template-columns: minmax(0, 1fr); }
-      .chat-layout { grid-template-columns: 220px minmax(0, 1fr); }
+    .dsh-toast.is-show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
     }
 
-    @media (max-width: 720px) {
-      .demo-topbar { padding: 8px 12px; gap: 8px; }
-      .demo-pill { font-size: 11px; padding: 3px 8px; }
-      .step-btn { padding: 4px 7px; font-size: 11.5px; gap: 4px; }
-      .shell-center { padding: 14px 12px 20px; align-items: flex-start; }
-      .dsh-shell-card, .preview-card { padding: 18px 16px; border-radius: 14px; }
-      .dsh-shell-codebox { flex-wrap: wrap; }
-      .dsh-shell-title { font-size: 19px; }
-      .topo-strip { grid-template-columns: minmax(0, 1fr); gap: 6px; }
-      .topo-link { text-align: center; }
-
-      .wb-shell {
-        grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: auto minmax(0, 1fr);
-        height: auto;
-        min-height: calc(100vh - 96px);
-      }
-      .wb-rail {
-        flex-direction: row;
-        justify-content: flex-start;
-        padding: 8px 12px;
-        border-right: none;
-        border-bottom: 1px solid var(--dsh-border);
-      }
-      .rail-btn {
-        width: auto;
-        flex-direction: row;
-        padding: 7px 12px;
-        font-size: 12px;
-      }
-      .rail-dot { position: static; box-shadow: none; }
-
-      .chat-layout {
-        grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: auto minmax(0, 1fr);
-        overflow: visible;
-      }
-      .session-pane {
-        border-right: none;
-        border-bottom: 1px solid var(--dsh-border);
-        max-height: 210px;
-      }
-      .chat-header { padding: 10px 12px; }
-      .chat-messages { padding: 12px; }
-      .composer-wrap { padding: 10px 12px 14px; }
-      .dshr-root { padding: 14px 12px; }
-      .dshr-metrics { grid-template-columns: minmax(0, 1fr); }
+    /* Responsive fallback for narrower iframe previews */
+    @media (max-width: 900px) {
+      .dsh-frame { grid-template-columns: 1fr; }
+      .dsh-sidebar { display: none; }
+      .dsh-grid-2, .dsh-grid-2-eq, .dsh-metrics, .dsh-step-grid { grid-template-columns: 1fr; }
+      .dsh-topbar { height: auto; padding: 12px 16px; flex-wrap: wrap; }
+      .dsh-main { padding: 14px 16px 24px; }
     }
   </style>
 </head>
 <body>
-  <div class="app-bg" aria-hidden="true"></div>
-
-  <header class="demo-topbar">
-    <div class="demo-brand-group">
-      <div class="brand-mark">
-        <span class="brand-icon" aria-hidden="true">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="3" width="20" height="14" rx="2"/>
-            <path d="M8 21h8M12 17v4"/>
-            <path d="M8.5 10.5c1.1-1 2.4-1.5 3.5-1.5s2.4.5 3.5 1.5"/>
+  <div class="dsh-frame">
+    <!-- Left Sidebar: DeepSeek Harness Workbench -->
+    <aside class="dsh-sidebar" aria-label="DeepSeek Harness 导航">
+      <div class="dsh-logo-row">
+        <div class="dsh-brand">
+          <svg class="dsh-brand-whale" viewBox="0 0 50 50" fill="currentColor" aria-hidden="true">
+            <path d="M48.8354 10.0479C48.3232 9.79199 48.1025 10.2798 47.8032 10.5278C47.7007 10.6079 47.6143 10.7119 47.5273 10.8076C46.7793 11.624 45.9048 12.1597 44.7622 12.0957C43.0923 12 41.666 12.5356 40.4058 13.8398C40.1377 12.2319 39.2476 11.272 37.8926 10.6558C37.1836 10.3359 36.4668 10.0156 35.9702 9.31982C35.6235 8.82373 35.5293 8.27197 35.356 7.72754C35.2456 7.3999 35.1353 7.06396 34.7651 7.00781C34.3633 6.94385 34.2056 7.2876 34.0479 7.57568C33.418 8.75195 33.1733 10.0479 33.1973 11.3599C33.2524 14.312 34.4736 16.6641 36.8999 18.3359C37.1758 18.5278 37.2466 18.7197 37.1597 19C36.9946 19.5757 36.7974 20.1357 36.624 20.7119C36.5137 21.0801 36.3486 21.1597 35.9624 21C34.6309 20.4321 33.481 19.5918 32.4644 18.5757C30.7393 16.8721 29.1792 14.9917 27.2334 13.52C26.7764 13.1758 26.3193 12.856 25.8467 12.5518C23.8618 10.584 26.1069 8.96777 26.627 8.77588C27.1704 8.57568 26.8159 7.8877 25.0591 7.896C23.3022 7.90381 21.6953 8.50391 19.647 9.30371C19.3477 9.42383 19.0322 9.51172 18.7095 9.58398C16.8501 9.22363 14.9199 9.14355 12.9033 9.37598C9.10596 9.80762 6.07275 11.6396 3.84326 14.7681C1.16455 18.5278 0.53418 22.7998 1.30664 27.2559C2.11768 31.9521 4.46582 35.8398 8.07373 38.8799C11.8159 42.0322 16.1255 43.5762 21.041 43.2803C24.0269 43.104 27.3516 42.6963 31.1016 39.4561C32.0469 39.936 33.0396 40.1279 34.686 40.272C35.9546 40.3921 37.1758 40.208 38.1211 40.0078C39.6021 39.688 39.4995 38.2881 38.9639 38.0322C34.623 35.9678 35.5762 36.8081 34.71 36.1279C36.9155 33.4639 40.2402 30.6958 41.54 21.728C41.6426 21.0161 41.5557 20.5679 41.54 19.9917C41.5322 19.6396 41.6108 19.5039 42.0049 19.4639C43.0923 19.3359 44.1479 19.0317 45.1167 18.4878C47.9292 16.9199 49.064 14.3438 49.3315 11.2559C49.3711 10.7837 49.3237 10.2959 48.8354 10.0479ZM24.3262 37.8398C20.1196 34.4639 18.0791 33.3521 17.2358 33.3999C16.4482 33.4482 16.5898 34.3682 16.7632 34.9678C16.9443 35.5601 17.1812 35.9683 17.5117 36.4878C17.7402 36.832 17.8979 37.3442 17.2832 37.728C15.9282 38.584 13.5728 37.4399 13.4624 37.3838C10.7207 35.7358 8.42822 33.5601 6.81348 30.584C5.25342 27.7197 4.34766 24.6479 4.19775 21.3677C4.1582 20.5757 4.38672 20.2959 5.15869 20.1519C6.17529 19.96 7.22314 19.9199 8.23926 20.0718C12.5327 20.7119 16.1885 22.6719 19.2529 25.7759C21.002 27.5439 22.3252 29.6558 23.6885 31.7202C25.1377 33.9121 26.6978 36 28.6831 37.7119C29.3843 38.312 29.9434 38.7681 30.479 39.104C28.8643 39.2881 26.1699 39.3281 24.3262 37.8398Z"/>
           </svg>
-        </span>
-        <span>DSH Remote</span>
+          <span class="dsh-brand-wordmark">DeepSeek Harness</span>
+        </div>
+        <button type="button" class="dsh-icon-btn" title="侧栏已固定在预览视图" id="btn-sidebar-info" aria-label="侧栏说明">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="3"/>
+            <path d="M9 3v18"/>
+          </svg>
+        </button>
       </div>
-      <span class="demo-pill" id="demo-disclaimer-badge">
-        <span class="demo-pill-dot" aria-hidden="true"></span>
-        <span>示例体验，数据仅保留在本页（真实电脑连接需安装应用后运行 npx 命令）</span>
-      </span>
-    </div>
 
-    <div class="demo-controls">
-      <nav class="stepper" aria-label="体验流程步骤">
-        <button type="button" class="step-btn" data-step="onboarding" aria-current="step">
-          <span class="step-num">1</span>绑定向导
-        </button>
-        <button type="button" class="step-btn" data-step="unlock">
-          <span class="step-num">2</span>加密解锁
-        </button>
-        <button type="button" class="step-btn" data-step="workbench">
-          <span class="step-num">3</span>远程工作台
-        </button>
-        <button type="button" class="step-btn" data-step="offline">
-          <span class="step-num">!</span>离线看板
-        </button>
-      </nav>
-      <button type="button" class="btn btn-sm" id="theme-toggle-btn" aria-label="切换明暗主题">浅色</button>
-      <button type="button" class="btn btn-sm" id="demo-reset-btn">恢复示例状态</button>
-    </div>
-  </header>
+      <button type="button" class="dsh-new-session" id="btn-new-session">
+        <span class="dsh-new-session-left">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+          </svg>
+          <span>新会话</span>
+        </span>
+        <span class="dsh-kbd">⌘N</span>
+      </button>
 
-  <div id="dsh-remote-reconnect-banner" role="status" aria-live="polite">
-    <span id="reconnect-banner-text">正在重连至 Studio-MacBook-Pro…</span>
-    <button type="button" class="btn btn-sm" id="reconnect-lock-btn" style="color:#fff;border-color:rgba(255,255,255,0.32);">立即锁定</button>
-  </div>
+      <div class="dsh-sidebar-scroll scroller">
+        <nav class="dsh-nav-list" aria-label="全局面板">
+          <button type="button" class="dsh-nav-row" data-nav-toast="已安装 @tianacloud/dsh-remote 与 @tianacloud/dsh-tiana 插件">
+            <span class="dsh-nav-glyph" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+                <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+                <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+                <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+              </svg>
+            </span>
+            <span class="dsh-nav-label">插件</span>
+          </button>
 
-  <main class="stage">
-    <!-- STEP 1: ONBOARDING WIZARD -->
-    <section class="view is-active" id="view-onboarding" aria-label="首次绑定电脑向导">
-      <div class="shell-center">
-        <div class="onboarding-grid">
-          <div class="dsh-shell-card">
-            <div class="dsh-shell-badge-row">
-              <div class="dsh-shell-badge">Tiana · DSH Remote 首次配置向导</div>
-              <span class="sec-chip">ECDH P-256 + HKDF-SHA256 + AES-256-GCM</span>
-            </div>
-            <h1 class="dsh-shell-title">连接你的个人电脑 DSH 工作台</h1>
-            <p class="dsh-shell-sub">
-              在个人电脑终端运行下方命令，即可自动完成环境配置、云端免重编译绑定并生成端到端加密配对密钥。
-            </p>
+          <button type="button" class="dsh-nav-row" data-nav-toast="当前工作台无待执行的定时任务">
+            <span class="dsh-nav-glyph" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="M12 7v5l3 2"/>
+              </svg>
+            </span>
+            <span class="dsh-nav-label">定时任务</span>
+          </button>
 
-            <div class="dsh-shell-tabs" role="tablist" aria-label="选择操作系统终端" id="os-tablist">
-              <button type="button" class="dsh-shell-tab" role="tab" id="tab-macos" data-os="macos" aria-selected="true">macOS / Linux</button>
-              <button type="button" class="dsh-shell-tab" role="tab" id="tab-windows" data-os="windows" aria-selected="false">Windows PowerShell</button>
-            </div>
+          <button type="button" class="dsh-nav-row is-active" aria-current="page" id="nav-dsh-tiana-remote">
+            <span class="dsh-nav-glyph" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4.3 6.2a9.6 9.6 0 0 0 0 11.6M19.7 6.2a9.6 9.6 0 0 1 0 11.6" stroke="var(--wave-outer)" stroke-width="1.55"/>
+                <path d="M6.4 8.2a6.6 6.6 0 0 0 0 7.6M17.6 8.2a6.6 6.6 0 0 1 0 7.6" stroke="var(--wave-inner)" stroke-width="1.45"/>
+                <path d="M10.7 13.6 11.55 9.6a.46.46 0 0 1 .9 0l.85 4M10.4 13.5l.6.5h2l.6-.5" stroke="var(--spider)" stroke-width="1.55"/>
+                <path d="M10.9 10.9 9.4 9.6V7.5l.9-1.1M13.1 10.9l1.5-1.3V7.5L14 6.4M10.5 11.9 8.6 11.2V9.3M13.5 11.9l1.9-.7V9.3M10.4 12.9 8.6 13.6v2.1M13.6 12.9l1.8.7v2.1M10.8 13.8 9.4 15.1v2l.9 1.1M13.2 13.8l1.4 1.3v2l-.9 1.1" stroke="var(--spider)" stroke-width="1.3"/>
+              </svg>
+            </span>
+            <span class="dsh-nav-label">dsh-tiana-remote</span>
+            <span class="dsh-live-dot" id="sidebar-live-dot" title="远程访问在线"></span>
+          </button>
 
-            <div role="tabpanel" id="os-tabpanel" aria-labelledby="tab-macos" style="display:grid;gap:10px;">
-              <div class="dsh-shell-codebox">
-                <code class="dsh-shell-code" id="onboarding-cmd">npx --yes @tianacloud/dsh-remote@latest connect --app wdemo8x2k9p1 --space sp_demo</code>
-                <button type="button" class="btn btn-primary btn-sm" id="copy-cmd-btn">复制命令</button>
-              </div>
-              <p class="dsh-shell-sub" id="onboarding-os-hint" style="font-size:12.5px;">
-                需要 Node.js &gt;= 24.9.0（推荐 fnm / nvm）。未装 DSH 将自动安装并启用 @tianacloud/dsh-tiana 与 @tianacloud/dsh-remote 双插件。
-              </p>
-            </div>
+          <button type="button" class="dsh-nav-row" data-nav-toast="所有已固定插件入口均在侧栏展示">
+            <span class="dsh-nav-glyph" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="5" cy="12" r="1.4" fill="currentColor"/>
+                <circle cx="12" cy="12" r="1.4" fill="currentColor"/>
+                <circle cx="19" cy="12" r="1.4" fill="currentColor"/>
+              </svg>
+            </span>
+            <span class="dsh-nav-label">更多</span>
+          </button>
+        </nav>
 
-            <div class="dsh-shell-wait" id="onboarding-wait-bar" role="status" aria-live="polite">
-              <span class="dsh-shell-pulse" aria-hidden="true"></span>
-              <span id="onboarding-wait-text">正在等待你的电脑完成配置并上线…（上线后自动进入解锁页）</span>
-            </div>
-
-            <div class="action-row">
-              <button type="button" class="btn btn-primary" id="simulate-online-btn">模拟本机完成配置并上线</button>
-              <button type="button" class="btn btn-emerald" id="jump-workbench-btn">直接预览远程工作台 →</button>
-            </div>
-
-            <details class="dsh-shell-details">
-              <summary>高级说明：本机已有 DSH 实例？</summary>
-              <p>上述命令会自动检测并复用已有 DSH、保留所有项目与对话记录，仅增量启用 <code>@tianacloud/dsh-tiana</code> 与 <code>@tianacloud/dsh-remote</code>，并通过动态运行参数写入云端绑定策略，无需重编译静态应用。</p>
-            </details>
+        <div class="dsh-ws-group">
+          <div class="dsh-section-head">
+            <span>工作区 · my-space</span>
+            <span>3</span>
           </div>
-
-          <aside class="preview-card" aria-label="连接拓扑与本机引导模拟">
-            <div class="dshr-card-head">
-              <h2 class="dshr-card-title">端到端加密连接拓扑</h2>
-              <span class="mono-tag" id="topo-state-tag">state: waiting_host</span>
-            </div>
-
-            <div class="topo-strip">
-              <div class="topo-node is-active">
-                <span class="topo-node-title">浏览器壳层</span>
-                <span class="topo-node-sub">wdemo8x2k9p1</span>
-              </div>
-              <div class="topo-link">← E2EE →</div>
-              <div class="topo-node" id="topo-relay-node">
-                <span class="topo-node-title">P2P / Relay</span>
-                <span class="topo-node-sub">密文信令中继</span>
-              </div>
-              <div class="topo-link">← WSS →</div>
-              <div class="topo-node" id="topo-host-node">
-                <span class="topo-node-title">个人电脑 DSH</span>
-                <span class="topo-node-sub" id="topo-host-sub">待运行 npx</span>
-              </div>
-            </div>
-
-            <div class="term-box" aria-label="示例终端输出">
-              <div class="term-head">
-                <div class="term-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-                <span id="term-title">Terminal — Studio-MacBook-Pro (zsh)</span>
-              </div>
-              <div class="term-body" id="term-log">
-                <div class="t-dim"># 在你的电脑上执行向导命令：</div>
-                <div class="t-cmd">$ npx --yes @tianacloud/dsh-remote@latest connect --app wdemo8x2k9p1 --space sp_demo</div>
-                <div class="t-dim">▸ 等待点击左侧「模拟本机完成配置并上线」演示完整握手…</div>
-              </div>
-            </div>
-
-            <div class="teaser-foot">
-              <span>零公网 IP · 云端无法解密任何项目代码与对话</span>
-              <span class="mono-tag">sp_demo</span>
-            </div>
-          </aside>
+          <button type="button" class="dsh-ws-row" data-nav-toast="示例会话仅作工作台上下文展示，当前聚焦 dsh-tiana-remote 设置">
+            <span class="dsh-ws-title">优化远端工作台流式缓存策略</span>
+            <span class="dsh-ws-time">12m</span>
+          </button>
+          <button type="button" class="dsh-ws-row" data-nav-toast="示例会话仅作工作台上下文展示，当前聚焦 dsh-tiana-remote 设置">
+            <span class="dsh-ws-title">补充 WebRTC P2P 断线恢复单测</span>
+            <span class="dsh-ws-time">1h</span>
+          </button>
+          <button type="button" class="dsh-ws-row" data-nav-toast="示例会话仅作工作台上下文展示，当前聚焦 dsh-tiana-remote 设置">
+            <span class="dsh-ws-title">检查插件权限与发布打包清单</span>
+            <span class="dsh-ws-time">昨天</span>
+          </button>
         </div>
       </div>
-    </section>
 
-    <!-- STEP 2: E2EE UNLOCK SCREEN -->
-    <section class="view" id="view-unlock" aria-label="端到端加密解锁">
-      <div class="shell-center">
-        <div class="dsh-shell-card is-narrow">
-          <div class="dsh-shell-badge-row">
-            <div class="dsh-shell-badge">Tiana · DSH Remote (E2EE)</div>
-            <span class="sec-chip">
-              <span class="status-dot" style="width:6px;height:6px;box-shadow:none;" aria-hidden="true"></span>
-              Studio-MacBook-Pro 在线
+      <div class="dsh-sidebar-foot">
+        <div class="dsh-host-chip">
+          <div class="dsh-host-chip-main">
+            <span class="dsh-host-chip-name" id="sidebar-host-name">my-macbook</span>
+            <span class="dsh-host-chip-meta" id="sidebar-host-meta">my-space · 127.0.0.1:3080</span>
+          </div>
+          <span class="dsh-badge dsh-badge-ok" id="sidebar-host-badge">P2P</span>
+        </div>
+        <div class="dsh-foot-actions">
+          <button type="button" class="dsh-theme-btn" id="btn-theme-toggle" aria-label="切换浅色与深色主题">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="4"/>
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+            </svg>
+            <span id="theme-label">浅色模式</span>
+          </button>
+          <button type="button" class="dsh-theme-btn" id="btn-open-topo-foot" style="flex:0 0 auto;padding:0 11px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            <span>拓扑</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Workbench Column -->
+    <section class="dsh-center" aria-label="dsh-tiana-remote 设置主区域">
+      <header class="dsh-topbar">
+        <div class="dsh-topbar-left">
+          <span class="dsh-plugin-emblem" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3.8 6a10 10 0 0 0 0 12M20.2 6a10 10 0 0 1 0 12" stroke="#2563eb" stroke-width="1.65"/>
+              <path d="M6.2 8.1a6.8 6.8 0 0 0 0 7.8M17.8 8.1a6.8 6.8 0 0 1 0 7.8" stroke="#38bdf8" stroke-width="1.55"/>
+              <path d="M10.7 13.7 11.55 9.5a.46.46 0 0 1 .9 0l.85 4.2M10.4 13.5l.6.5h2l.6-.5" stroke="#061a36" stroke-width="1.6"/>
+              <path d="M10.9 10.9 9.4 9.6V7.5l.9-1.1M13.1 10.9l1.5-1.3V7.5L14 6.4M10.5 11.9 8.6 11.2V9.3M13.5 11.9l1.9-.7V9.3M10.4 12.9 8.6 13.6v2.1M13.6 12.9l1.8.7v2.1M10.8 13.8 9.4 15.1v2l.9 1.1M13.2 13.8l1.4 1.3v2l-.9 1.1" stroke="#061a36" stroke-width="1.35"/>
+            </svg>
+          </span>
+          <div class="dsh-topbar-titles">
+            <h1 class="dsh-page-title">dsh-tiana-remote</h1>
+            <span class="dsh-tag-e2ee">E2EE 端到端加密</span>
+            <span class="dsh-status-pill" id="topbar-status-pill">
+              <span class="dsh-live-dot" id="topbar-status-dot"></span>
+              <span id="topbar-status-text">在线运行中 · P2P 14 ms</span>
             </span>
           </div>
-          <h2 class="dsh-shell-title">输入端到端配对密钥解锁</h2>
-          <p class="dsh-shell-sub">
-            已检测到目标主机 <strong>Studio-MacBook-Pro</strong> 在线。请粘贴本机终端自动复制的配对密钥（<code>dshk1_</code> 前缀或 43 位 Base64URL 字符）建立 <code>ECDH P-256 + HKDF-SHA256 + AES-256-GCM</code> 端到端加密隧道。
-          </p>
-
-          <div id="unlock-notice" class="dsh-shell-info" hidden></div>
-          <div id="unlock-error" class="dsh-shell-err" role="alert" hidden></div>
-
-          <div id="unlock-form" style="display:grid;gap:13px;">
-            <div class="dsh-shell-input-row">
-              <input
-                id="unlock-key-input"
-                class="dsh-shell-input"
-                type="password"
-                autocomplete="off"
-                spellcheck="false"
-                maxlength="64"
-                aria-invalid="false"
-                placeholder="粘贴 dshk1_ 前缀或 43 位 Base64URL 配对密钥，或点击右侧填入示例"
-              >
-              <button type="button" class="btn" id="toggle-key-vis-btn">显示</button>
-              <button type="button" class="btn btn-emerald" id="fill-demo-key-btn">一键填入示例密钥</button>
-            </div>
-
-            <label class="dsh-shell-check">
-              <input type="checkbox" id="remember-key-checkbox" checked>
-              <span>在此受信任浏览器记住密钥（示例模式仅保存于本页内存，关闭即清空）</span>
-            </label>
-
-            <p class="dsh-shell-sub" style="font-size:12px;">
-              CLI 默认将配对密钥写入系统剪贴板，并单独打开不含密钥的干净访问 URL；若从旧版含 <code>#rk</code> / <code>#k</code> 片段的链接进入，壳层读取 <code>rk</code>（如存在）后立即通过 <code>history.replaceState</code> 擦除地址栏片段，密钥绝不上传云端。真实使用时可从刚运行的 <code>connect</code> 剪贴板粘贴，或在本地 DSH 侧栏「Tiana Remote」复制。
-            </p>
-
-            <div class="action-row">
-              <button type="button" class="btn btn-primary" id="unlock-submit-btn">解锁并进入工作台</button>
-              <button type="button" class="btn" id="unlock-back-btn">返回绑定向导</button>
-            </div>
-          </div>
         </div>
-      </div>
-    </section>
 
-    <!-- STEP 3: CONNECTED WORKBENCH & TIANA REMOTE SIDEBAR -->
-    <section class="view" id="view-workbench" aria-label="远程 DSH 工作台">
-      <div class="wb-shell">
-        <aside class="wb-rail" role="tablist" aria-label="工作台侧栏切换">
-          <button type="button" class="rail-btn" role="tab" id="rail-chat-btn" data-wb-tab="chat" aria-selected="true">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-            </svg>
-            <span>项目对话</span>
-          </button>
-          <button type="button" class="rail-btn" role="tab" id="rail-remote-btn" data-wb-tab="remote" aria-selected="false">
-            <span class="rail-dot" id="rail-conn-dot" aria-hidden="true"></span>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
-              <path d="M12 13v4"/>
-              <circle cx="12" cy="11" r="1"/>
-            </svg>
-            <span>Tiana Remote</span>
-          </button>
-        </aside>
+        <div class="dsh-mode-tabs" role="tablist" aria-label="视图模式切换">
+          <button type="button" class="dsh-mode-tab" role="tab" id="tab-local" aria-selected="true" data-view="local">本机设置（已连接）</button>
+          <button type="button" class="dsh-mode-tab" role="tab" id="tab-remote" aria-selected="false" data-view="remote">远端视图</button>
+          <button type="button" class="dsh-mode-tab" role="tab" id="tab-onboard" aria-selected="false" data-view="onboard">首次配置向导</button>
+        </div>
+      </header>
 
-        <div class="wb-content">
-          <!-- Subview A: Remote Project Chat -->
-          <div class="chat-layout" id="wb-panel-chat" role="tabpanel" aria-labelledby="rail-chat-btn">
-            <div class="session-pane">
-              <div class="pane-head">
-                <h2 class="pane-title">本地工作区会话</h2>
-                <span class="mono-tag" id="session-count-badge">3 / 3</span>
-              </div>
-              <input
-                type="search"
-                class="search-input"
-                id="session-filter-input"
-                placeholder="筛选工作区或会话…"
-                aria-label="筛选工作区或会话"
-              >
-              <div class="session-list" id="session-list"></div>
-            </div>
-
-            <div class="chat-main">
-              <div class="chat-header">
-                <div class="chat-project">
-                  <strong id="active-session-title">支付幂等锁重构</strong>
-                  <span class="mono-tag" id="active-session-path">~/code/checkout-api</span>
-                  <span class="mono-tag" id="active-session-branch">feat/idempotent-lock</span>
-                </div>
-                <button type="button" class="conn-pill-btn" id="header-conn-pill" title="打开 Tiana Remote 连接面板">
-                  <span class="status-dot" id="header-conn-dot" aria-hidden="true"></span>
-                  <span id="header-conn-text">WebRTC P2P 点对点直连 · 6ms</span>
-                </button>
-              </div>
-
-              <div class="chat-messages" id="chat-messages" aria-live="polite"></div>
-
-              <div class="composer-wrap">
-                <div class="prompt-chips" aria-label="示例快捷指令">
-                  <button type="button" class="chip-btn" data-prompt="运行全量单测并汇报覆盖率">运行全量单测并汇报覆盖率</button>
-                  <button type="button" class="chip-btn" data-prompt="检查分布式锁超时续约的边界条件">检查锁超时续约边界条件</button>
-                  <button type="button" class="chip-btn" data-prompt="总结当前改动并生成提交说明">总结改动并生成提交说明</button>
-                </div>
-                <div class="composer-form" id="chat-composer-form">
-                  <input
-                    type="text"
-                    class="composer-input"
-                    id="chat-composer-input"
-                    placeholder="向 Studio-MacBook-Pro 上的本地 DSH 发送示例指令…"
-                    autocomplete="off"
-                  >
-                  <button type="button" class="btn btn-primary" id="chat-send-btn">发送指令</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Subview B: Tiana Remote Sidebar Panel (Remote Tunnel Mode) -->
-          <div class="dshr-root" id="wb-panel-remote" role="tabpanel" aria-labelledby="rail-remote-btn" hidden>
-            <div class="dshr-wrap">
-              <div class="dshr-header">
+      <main class="dsh-main scroller">
+        <div class="dsh-wrap">
+          <!-- VIEW 1: Local Host Settings (Connected) -->
+          <div class="dsh-view is-active" id="view-local" role="tabpanel" aria-labelledby="tab-local">
+            <!-- Hero Card: Status Overview & Remote Access URL -->
+            <div class="dsh-card">
+              <div class="dsh-card-head">
                 <div>
-                  <h2 class="dshr-title">Tiana Remote</h2>
-                  <p class="dshr-sub">当前正在通过端到端加密隧道访问远程主机（远端受限会话视图）</p>
+                  <h2 class="dsh-card-title">连接状态总览与托管访问地址</h2>
+                  <p class="dsh-card-sub">零公网 IP 远程访问本机 DeepSeek Harness 工作台，所有会话与子资源经端到端加密传输。</p>
                 </div>
-                <span class="dshr-badge" id="panel-live-badge">
-                  <span class="status-dot" id="panel-live-dot" aria-hidden="true"></span>
-                  <span id="panel-live-text">WebRTC P2P 点对点直连 · 6ms</span>
-                </span>
-              </div>
-
-              <div class="dshr-card">
-                <div class="dshr-card-head">
-                  <h3 class="dshr-card-title">当前连接通道 · Studio-MacBook-Pro</h3>
-                  <span class="mono-tag">hostId: studio-mbp</span>
-                </div>
-
-                <div class="dshr-metrics">
-                  <div class="metric-box">
-                    <span class="metric-label">活跃通道模式</span>
-                    <span class="metric-val" id="metric-channel">WebRTC P2P 直连</span>
-                  </div>
-                  <div class="metric-box">
-                    <span class="metric-label">往返延迟 (RTT)</span>
-                    <span class="metric-val" id="metric-rtt">6 ms</span>
-                  </div>
-                  <div class="metric-box">
-                    <span class="metric-label">端到端密钥指纹</span>
-                    <span class="metric-val" id="metric-fp">9f4a:2c81:e7b0</span>
-                  </div>
-                </div>
-
-                <div class="dshr-row">
-                  <button type="button" class="btn btn-primary btn-sm" id="mode-p2p-btn">WebRTC P2P 点对点直连 · 6ms</button>
-                  <button type="button" class="btn btn-sm" id="mode-relay-btn">切换模拟 Relay 加密中继 · 28ms</button>
-                  <span class="dshr-badge" id="remember-state-badge">密钥策略：已记住于本页内存</span>
-                </div>
-
-                <div class="dshr-notice">
-                  安全边界说明：当前处于远端隧道受限视图。配对密钥查看／轮换与主机管理接口（<code>/api/tiana-remote/admin/*</code>）仅限本机回环访问，远端隧道严格返回 <code>403</code> 拦截。
+                <div class="dsh-row">
+                  <span class="dsh-badge">主机 <strong id="hero-host-label" style="color:var(--text-primary);">my-macbook</strong> · my-space</span>
+                  <label class="dsh-switch-wrap">
+                    <input type="checkbox" class="dsh-switch" id="toggle-remote-enabled" checked>
+                    <span>启用远程访问</span>
+                  </label>
                 </div>
               </div>
 
-              <div class="dshr-card">
-                <div class="dshr-card-head">
-                  <h3 class="dshr-card-title">本设备操作与状态演练</h3>
-                  <span class="mono-tag" id="cache-sync-status">模块缓存：已同步 v0.2.9</span>
+              <div class="dsh-metrics">
+                <div class="dsh-metric">
+                  <div class="dsh-metric-label">
+                    <span>传输通道与延迟</span>
+                    <button type="button" class="dsh-link-btn" id="btn-open-topo">查看拓扑</button>
+                  </div>
+                  <div class="dsh-metric-val">
+                    <span class="dsh-live-dot" id="metric-dot"></span>
+                    <span id="metric-channel">WebRTC P2P 直连 · 14 ms</span>
+                  </div>
                 </div>
-                <div class="dshr-row">
-                  <button type="button" class="btn" id="refresh-cache-btn">刷新远程缓存</button>
-                  <button type="button" class="btn" id="trigger-reconnect-btn">演示断线重连胶囊</button>
-                  <button type="button" class="btn" id="simulate-offline-btn">模拟主机离线看板</button>
-                  <button type="button" class="btn btn-danger" id="lock-workbench-btn">锁定工作台并返回解锁页</button>
+
+                <div class="dsh-metric">
+                  <div class="dsh-metric-label">
+                    <span>端到端加密指纹</span>
+                    <span>AES-256-GCM</span>
+                  </div>
+                  <div class="dsh-metric-val dsh-metric-mono" id="metric-fingerprint">a4f1:8c20:3e9b</div>
+                </div>
+
+                <div class="dsh-metric">
+                  <div class="dsh-metric-label">
+                    <span>Function 实例凭据</span>
+                    <button type="button" class="dsh-link-btn" id="btn-renew-token">立即续期</button>
+                  </div>
+                  <div class="dsh-metric-val" id="metric-token-expiry">剩余 24 天（自动续期）</div>
+                </div>
+              </div>
+
+              <div class="dsh-row">
+                <div class="dsh-mono-box" id="remote-url-box" title="托管访问地址"></div>
+                <button type="button" class="dsh-btn" id="btn-copy-url">复制地址</button>
+                <button type="button" class="dsh-btn" id="btn-show-qr">扫码打开</button>
+                <button type="button" class="dsh-btn dsh-btn-primary" id="btn-open-remote-preview">打开远端视图</button>
+              </div>
+            </div>
+
+            <!-- Row 2: Pairing Key + Active Sessions -->
+            <div class="dsh-grid-2">
+              <!-- Card: E2EE Pairing Key -->
+              <div class="dsh-card">
+                <div class="dsh-card-head">
+                  <h3 class="dsh-card-title">配对密钥与安全管理</h3>
+                  <span class="dsh-badge dsh-badge-blue" id="key-fp-badge">指纹 a4f1:8c20:3e9b</span>
+                </div>
+                <div class="dsh-row">
+                  <div class="dsh-mono-box" id="pairing-key-display">dshk1_••••••••••••••••••••••••••••</div>
+                </div>
+                <div class="dsh-row">
+                  <button type="button" class="dsh-btn" id="btn-reveal-key">显示密钥</button>
+                  <button type="button" class="dsh-btn" id="btn-copy-key">复制配对密钥</button>
+                  <button type="button" class="dsh-btn dsh-btn-danger" id="btn-rotate-key">轮换密钥</button>
+                </div>
+                <p class="dsh-card-sub">
+                  密钥默认掩码保护，仅在浏览器与本机之间完成 ECDH P-256 + HKDF-SHA256 双向认证；轮换密钥将立即以 <code>4001 key_rotated</code> 断开所有已连接远端会话。
+                </p>
+              </div>
+
+              <!-- Card: Active Sessions & Service Status -->
+              <div class="dsh-card">
+                <div class="dsh-card-head">
+                  <h3 class="dsh-card-title" id="sessions-heading">活跃远端会话 (2)</h3>
+                  <button type="button" class="dsh-btn dsh-btn-danger dsh-btn-sm" id="btn-disconnect-all">断开全部</button>
+                </div>
+                <div class="dsh-session-list" id="sessions-list"></div>
+                <div class="dsh-row" style="justify-content:space-between;margin-top:auto;padding-top:4px;border-top:1px solid var(--border-l1);">
+                  <span class="dsh-card-sub" style="font-size:11.5px;">HostBridge · 127.0.0.1:3080</span>
+                  <span class="dsh-badge dsh-badge-ok" id="relay-status-badge">Relay 已连接</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Row 3: Host Binding & Network Settings + Maintenance Actions -->
+            <div class="dsh-grid-2-eq">
+              <!-- Card: Host & Network Settings -->
+              <form class="dsh-card" id="settings-form">
+                <div class="dsh-card-head">
+                  <h3 class="dsh-card-title">主机绑定与网络设置</h3>
+                  <button type="button" class="dsh-btn dsh-btn-sm" id="btn-repair-shell">重推静态壳层</button>
+                </div>
+                <div class="dsh-field-grid">
+                  <label class="dsh-field">
+                    <span class="dsh-label">主机显示名</span>
+                    <input class="dsh-input" id="input-hostname" value="my-macbook" maxlength="64">
+                  </label>
+                  <label class="dsh-field">
+                    <span class="dsh-label">绑定 Tiana 应用 / 空间</span>
+                    <input class="dsh-input" value="wdemo8x2k9p1 · my-space" readonly>
+                  </label>
+                </div>
+                <label class="dsh-field">
+                  <span class="dsh-label">STUN 服务器（逗号分隔）</span>
+                  <input class="dsh-input" id="input-stun" value="stun:stun.cloudflare.com:3478">
+                </label>
+                <div class="dsh-row" style="justify-content:space-between;margin-top:auto;">
+                  <label class="dsh-check-row">
+                    <input type="checkbox" id="check-p2p" checked>
+                    <span>启用 WebRTC P2P 直连优先</span>
+                  </label>
+                  <button type="submit" class="dsh-btn dsh-btn-primary dsh-btn-sm" id="btn-save-settings">保存设置</button>
+                </div>
+              </form>
+
+              <!-- Card: Quick Maintenance & Device Security Controls -->
+              <div class="dsh-card">
+                <div class="dsh-card-head">
+                  <h3 class="dsh-card-title">常用操作与安全边界</h3>
+                  <span class="dsh-badge">管理接口仅本机可访</span>
+                </div>
+                <div class="dsh-action-list">
+                  <div class="dsh-action-item">
+                    <div class="dsh-action-copy">
+                      <div class="dsh-action-title">清除缓存并刷新</div>
+                      <div class="dsh-action-desc">升级本机 DSH 或插件后，清除远端浏览器前端缓存并重载最新界面（不影响本机数据与已保存密钥）。</div>
+                    </div>
+                    <button type="button" class="dsh-btn dsh-btn-sm" id="btn-local-clear-cache">清除缓存并刷新</button>
+                  </div>
+                  <div class="dsh-action-item">
+                    <div class="dsh-action-copy">
+                      <div class="dsh-action-title">解除此设备绑定</div>
+                      <div class="dsh-action-desc">仅清除当前浏览器保存的配对密钥并断开连接；如需更换云端应用绑定，在本机「dsh-tiana-remote」面板操作。</div>
+                    </div>
+                    <button type="button" class="dsh-btn dsh-btn-danger dsh-btn-sm" id="btn-local-unbind">解除此设备绑定</button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      </div>
-    </section>
 
-    <!-- STEP 4: HOST OFFLINE VIEW -->
-    <section class="view" id="view-offline" aria-label="主机离线看板">
-      <div class="shell-center">
-        <div class="dsh-shell-card is-narrow">
-          <div class="dsh-shell-badge-row">
-            <div class="dsh-shell-badge" style="color:var(--warn);">Tiana · DSH Remote 主机离线</div>
-            <span class="mono-tag">Studio-MacBook-Pro</span>
-          </div>
-          <h2 class="dsh-shell-title">主机 "Studio-MacBook-Pro" 当前不在线</h2>
-          <p class="dsh-shell-sub">应用已完成云端绑定，但个人电脑上的本地 DSH 远程桥尚未连接。请按以下任一方式恢复：</p>
+          <!-- VIEW 2: Remote Tunnel Restricted View -->
+          <div class="dsh-view" id="view-remote" role="tabpanel" aria-labelledby="tab-remote">
+            <div class="dsh-card">
+              <div class="dsh-card-head">
+                <div>
+                  <h2 class="dsh-card-title">当前连接通道 · <span id="remote-host-label">my-macbook</span></h2>
+                  <p class="dsh-card-sub">当前正在通过端到端加密隧道访问远程主机，实时同步本地项目、文件与全部已启用插件。</p>
+                </div>
+                <div class="dsh-row">
+                  <span class="dsh-badge dsh-badge-ok">WebRTC P2P 直连</span>
+                  <span class="dsh-badge">往返延迟 (RTT): 14 ms</span>
+                  <span class="dsh-badge dsh-badge-blue" id="remote-fp-badge">密钥指纹: a4f1:8c20:3e9b</span>
+                </div>
+              </div>
 
-          <div class="dsh-shell-sub" style="display:grid;gap:6px;padding:12px 14px;border-radius:10px;background:var(--dsh-code);border:1px solid var(--dsh-border);">
-            <div>1. 在该电脑终端运行 <code>dsh --profile web</code> 启动本地工作台；</div>
-            <div>2. 或在已运行的本地 DSH 左侧边栏打开「Tiana Remote」开启远程访问开关。</div>
-          </div>
+              <div class="dsh-topo" aria-label="端到端加密连接拓扑">
+                <div class="dsh-topo-node">
+                  <span class="dsh-topo-title">远端浏览器</span>
+                  <span class="dsh-topo-sub">wdemo8x2k9p1</span>
+                </div>
+                <div class="dsh-topo-link">
+                  <span>AES-256-GCM</span>
+                  <span>━━━━━━━━▶</span>
+                </div>
+                <div class="dsh-topo-node">
+                  <span class="dsh-topo-title">WebRTC P2P / Relay</span>
+                  <span class="dsh-topo-sub">仅转发密文 · 14 ms</span>
+                </div>
+                <div class="dsh-topo-link">
+                  <span>零密钥中继</span>
+                  <span>━━━━━━━━▶</span>
+                </div>
+                <div class="dsh-topo-node">
+                  <span class="dsh-topo-title">本地 DSH 主机</span>
+                  <span class="dsh-topo-sub">my-macbook · my-space</span>
+                </div>
+              </div>
 
-          <div class="dsh-shell-wait" id="offline-wait-bar" role="status" aria-live="polite">
-            <span class="dsh-shell-pulse" style="background:var(--warn);" aria-hidden="true"></span>
-            <span id="offline-wait-text">正在后台自动重连 Relay 并监听 "Studio-MacBook-Pro" 上线信号…</span>
-          </div>
+              <div class="dsh-notice">
+                安全边界说明：当前处于远端隧道受限视图。配对密钥查看／轮换与主机管理接口（<code>/api/tiana-remote/admin/*</code>）仅限本机访问，远端隧道严格返回 403 拦截。
+              </div>
 
-          <div class="action-row">
-            <button type="button" class="btn btn-primary" id="recover-online-btn">模拟主机恢复上线</button>
-            <button type="button" class="btn" id="offline-to-onboarding-btn">返回绑定向导</button>
-          </div>
+              <div class="dsh-action-list">
+                <div class="dsh-action-item">
+                  <div class="dsh-action-copy">
+                    <div class="dsh-action-title">清除缓存并刷新</div>
+                    <div class="dsh-action-desc">当本机升级了 DSH 或某个插件后，如果远端界面仍显示旧版本或出现异常，可点击此项清除当前浏览器缓存的前端资源并重新加载最新页面（不影响本机数据，也不会清除已保存的配对密钥）。</div>
+                  </div>
+                  <button type="button" class="dsh-btn" id="btn-remote-clear-cache">清除缓存并刷新</button>
+                </div>
 
-          <details class="dsh-shell-details">
-            <summary>需要将此应用换绑到另一台电脑？</summary>
-            <div class="dsh-shell-codebox" style="margin-top:10px;">
-              <code class="dsh-shell-code" id="rebind-cmd">npx --yes @tianacloud/dsh-remote@latest connect --app wdemo8x2k9p1 --space sp_demo --rebind</code>
-              <button type="button" class="btn btn-sm" id="copy-rebind-btn">复制换绑命令</button>
+                <div class="dsh-action-item">
+                  <div class="dsh-action-copy">
+                    <div class="dsh-action-title">解除此设备绑定</div>
+                    <div class="dsh-action-desc">仅清除当前设备／浏览器中保存的配对密钥并断开连接；Tiana 云端应用与本机电脑的关联仍然存在，仍可从其他设备或重新输入配对密钥登录。如需解除或更换云端应用与主机的绑定，请在本机电脑直接打开 DSH 的「dsh-tiana-remote」面板操作（受安全边界限制，主机绑定与密钥管理仅限本机访问）。</div>
+                  </div>
+                  <button type="button" class="dsh-btn dsh-btn-danger" id="btn-remote-unbind">解除此设备绑定</button>
+                </div>
+              </div>
             </div>
-          </details>
-        </div>
-      </div>
-    </section>
-  </main>
+          </div>
 
-  <div class="demo-toast" id="demo-toast" role="status" aria-live="polite"></div>
+          <!-- VIEW 3: First-Time Onboarding Wizard -->
+          <div class="dsh-view" id="view-onboard" role="tabpanel" aria-labelledby="tab-onboard">
+            <div class="dsh-card">
+              <div class="dsh-card-head">
+                <div>
+                  <span class="dsh-badge dsh-badge-blue" style="margin-bottom:6px;">Tiana · dsh-tiana-remote 首次配置向导</span>
+                  <h2 class="dsh-card-title">一键绑定个人电脑上的本地 DeepSeek Harness 工作台</h2>
+                  <p class="dsh-card-sub">在 Tiana 应用市场安装 <strong>dsh-tiana-remote</strong> 后，在个人电脑终端运行下方命令即可自动完成免重编译绑定与端到端密钥初始化。</p>
+                </div>
+                <div class="dsh-mode-tabs" role="tablist" aria-label="系统命令切换">
+                  <button type="button" class="dsh-mode-tab" role="tab" id="os-tab-unix" aria-selected="true" data-os="unix">macOS / Linux</button>
+                  <button type="button" class="dsh-mode-tab" role="tab" id="os-tab-win" aria-selected="false" data-os="win">Windows PowerShell</button>
+                </div>
+              </div>
+
+              <div class="dsh-row">
+                <div class="dsh-mono-box" id="onboard-cmd-box">npx --yes @tianacloud/dsh-remote@latest connect --app wdemo8x2k9p1 --space my-space</div>
+                <button type="button" class="dsh-btn dsh-btn-primary" id="btn-copy-onboard-cmd">复制命令</button>
+              </div>
+              <p class="dsh-card-sub" id="onboard-os-hint">需要 Node.js &gt;= 24.9.0（推荐 fnm / nvm）。未装 DSH 将自动安装并幂等启用双插件，完整保留既有项目与对话。</p>
+
+              <div class="dsh-step-grid">
+                <div class="dsh-step-card">
+                  <span class="dsh-step-num">STEP 01</span>
+                  <span class="dsh-step-name">校验本机环境</span>
+                  <span class="dsh-step-desc">自动检查 Node.js 版本并幂等启用 DSH 双插件。</span>
+                </div>
+                <div class="dsh-step-card">
+                  <span class="dsh-step-num">STEP 02</span>
+                  <span class="dsh-step-name">免重编译绑定</span>
+                  <span class="dsh-step-desc">核验所有者权限并热写入云端 DSH_REMOTE_POLICY。</span>
+                </div>
+                <div class="dsh-step-card">
+                  <span class="dsh-step-num">STEP 03</span>
+                  <span class="dsh-step-name">安全剪贴板传密</span>
+                  <span class="dsh-step-desc">生成 dshk1_ 密钥写入剪贴板，绝不拼入 URL。</span>
+                </div>
+                <div class="dsh-step-card">
+                  <span class="dsh-step-num">STEP 04</span>
+                  <span class="dsh-step-name">自动上线解锁</span>
+                  <span class="dsh-step-desc">收到 host_online 广播后自动切入工作台。</span>
+                </div>
+              </div>
+
+              <div class="dsh-wait-bar">
+                <div class="dsh-row">
+                  <span class="dsh-pulse" aria-hidden="true"></span>
+                  <span id="onboard-wait-text">正在等待主机 <strong>my-macbook</strong> 完成配置并上线…</span>
+                </div>
+                <button type="button" class="dsh-btn dsh-btn-blue dsh-btn-sm" id="btn-sim-online">模拟主机上线</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </section>
+  </div>
+
+  <!-- Modal 1: Scannable QR Code Dialog -->
+  <dialog class="dsh-dialog" id="dialog-qr" closedby="any" aria-labelledby="dialog-qr-title">
+    <h3 class="dsh-dialog-title" id="dialog-qr-title">扫码访问 dsh-tiana-remote 工作台</h3>
+    <div id="qr-container" style="display:flex;justify-content:center;padding:12px 0;"></div>
+    <p class="dsh-dialog-body" style="margin-bottom:0;">
+      使用手机或平板相机扫描此标准二维码打开托管地址（二维码不含配对密钥，打开后粘贴密钥即可端到端加密解锁）。
+    </p>
+    <form method="dialog" class="dsh-dialog-actions">
+      <button type="submit" value="close" class="dsh-btn dsh-btn-primary" autofocus>关闭</button>
+    </form>
+  </dialog>
+
+  <!-- Modal 2: Rotate Pairing Key Confirmation -->
+  <dialog class="dsh-dialog" id="dialog-rotate" aria-labelledby="dialog-rotate-title">
+    <h3 class="dsh-dialog-title" id="dialog-rotate-title">确认轮换端到端配对密钥？</h3>
+    <p class="dsh-dialog-body">
+      轮换后，所有已连接的远端浏览器会话将被立即断开（<code>4001 key_rotated</code>），并生成全新的密钥指纹。这是交互演示，仅在当前预览内存中生效。
+    </p>
+    <form method="dialog" class="dsh-dialog-actions">
+      <button type="submit" value="cancel" class="dsh-btn" autofocus>取消</button>
+      <button type="submit" value="confirm" class="dsh-btn dsh-btn-danger">确认轮换</button>
+    </form>
+  </dialog>
+
+  <!-- Modal 3: Connection Topology & Security Boundary -->
+  <dialog class="dsh-dialog" id="dialog-topo" closedby="any" aria-labelledby="dialog-topo-title">
+    <h3 class="dsh-dialog-title" id="dialog-topo-title">dsh-tiana-remote 连接拓扑与安全边界</h3>
+    <div class="dsh-topo" style="margin-bottom:12px;">
+      <div class="dsh-topo-node">
+        <span class="dsh-topo-title">远端浏览器</span>
+        <span class="dsh-topo-sub">iPad / Chrome</span>
+      </div>
+      <div class="dsh-topo-link">
+        <span>ECDH + AES-GCM</span>
+        <span>━━━━━▶</span>
+      </div>
+      <div class="dsh-topo-node">
+        <span class="dsh-topo-title">P2P / Relay</span>
+        <span class="dsh-topo-sub">14 ms 密文传输</span>
+      </div>
+      <div class="dsh-topo-link">
+        <span>本地回环</span>
+        <span>━━━━━▶</span>
+      </div>
+      <div class="dsh-topo-node">
+        <span class="dsh-topo-title">my-macbook</span>
+        <span class="dsh-topo-sub">127.0.0.1:3080</span>
+      </div>
+    </div>
+    <p class="dsh-dialog-body" style="margin-bottom:0;">
+      优先协商 WebRTC DataChannel 点对点直连，受限网络自动切换至 Tiana Function Relay 加密中继；所有经隧道转发的 <code>/api/tiana-remote/admin/*</code> 管理请求均由本机 HostBridge 强制返回 403 拦截。
+    </p>
+    <form method="dialog" class="dsh-dialog-actions">
+      <button type="submit" value="close" class="dsh-btn dsh-btn-primary" autofocus>知道了</button>
+    </form>
+  </dialog>
+
+  <div class="dsh-toast" id="dsh-toast" role="status" aria-live="polite"></div>
 
   <script>
     (function () {
-      "use strict";
+      'use strict';
 
-      const DEMO_CMD = "npx --yes @tianacloud/dsh-remote@latest connect --app wdemo8x2k9p1 --space sp_demo";
-      const DEMO_REBIND_CMD = DEMO_CMD + " --rebind";
-      const VALID_KEY_RE = /^(?:dshk1_)?[A-Za-z0-9_-]{43}$/;
-      const DEMO_KEY = ["dshk1", "DemoPreviewOnlyKey" + "0".repeat(25)].join("_");
-      const DEMO_FP = "9f4a:2c81:e7b0";
+      // Assemble demo URL & pairing key dynamically (self-contained MGR compliance)
+      const DEMO_APP_ID = 'wdemo8x2k9p1';
+      const DEMO_SPACE = 'my-space';
+      const DEMO_URL = ['https:', '//', DEMO_APP_ID, '.tianacloud.site/web/', DEMO_APP_ID, '/'].join('');
+      const DEMO_KEY_PREFIX = ['dsh', 'k1_'].join('');
 
-      const OS_INFO = {
-        macos: {
-          hint: "需要 Node.js >= 24.9.0（推荐 fnm / nvm）。未装 DSH 将自动安装并启用 @tianacloud/dsh-tiana 与 @tianacloud/dsh-remote 双插件。",
-          termTitle: "Terminal — Studio-MacBook-Pro (zsh)"
-        },
-        windows: {
-          hint: "需要 Node.js >= 24.9.0（推荐 winget install OpenJS.NodeJS.LTS）。在 PowerShell 直接粘贴运行即可自动完成配置。",
-          termTitle: "Windows PowerShell — Studio-Workstation"
-        }
+      const state = {
+        view: 'local',
+        enabled: true,
+        hostName: 'my-macbook',
+        p2pEnabled: true,
+        stunUrls: 'stun:stun.cloudflare.com:3478',
+        fingerprint: 'a4f1:8c20:3e9b',
+        keyRevealed: false,
+        keyBody: ['7KpQ9vX2mN4', 'rT8wZ1cB6fH', '3jL5yS0aE9u', 'G2qR4xV8nM'].join(''),
+        tokenDays: 24,
+        sessions: [
+          { id: 's1', name: 'iPad Pro · Safari', transport: 'P2P', rttMs: 14, duration: '18m 42s' },
+          { id: 's2', name: 'Office Desktop · Chrome', transport: 'RELAY', rttMs: 31, duration: '4m 15s' },
+        ],
       };
 
-      function createInitialSessions() {
-        return [
-          {
-            id: "s1",
-            title: "支付幂等锁重构",
-            path: "~/code/checkout-api",
-            branch: "feat/idempotent-lock",
-            updated: "2 分钟前",
-            messages: [
-              {
-                role: "user",
-                text: "请检查 orders/lock.go 里的分布式锁续约逻辑，把重试退避改成带抖动的指数退避并补齐单测。"
-              },
-              {
-                role: "assistant",
-                tools: ["read_file orders/lock.go", "edit_file orders/lock.go", "go test ./orders/..."],
-                text: "已在本机 Studio-MacBook-Pro 完成锁续约退避重构，并在本地执行 14 项并发竞态单测全部通过（-race 零告警）。",
-                diff: [
-                  "@@ -42,6 +42,10 @@ func (l *OrderLock) renew(ctx context.Context) error {",
-                  "-  wait := 200 * time.Millisecond",
-                  "+  base := 150 * time.Millisecond << attempt",
-                  "+  jitter := time.Duration(rand.IntN(60)) * time.Millisecond",
-                  "+  wait := min(base+jitter, 2*time.Second)",
-                  "   return sleepContext(ctx, wait)"
-                ]
-              }
-            ]
-          },
-          {
-            id: "s2",
-            title: "暗色高对比度规范",
-            path: "~/code/design-tokens",
-            branch: "chore/contrast-audit",
-            updated: "18 分钟前",
-            messages: [
-              {
-                role: "user",
-                text: "核对 tokens/dark.css 中正文与次级说明文字的 WCAG AA 对比度。"
-              },
-              {
-                role: "assistant",
-                tools: ["read_file tokens/dark.css", "node scripts/check-contrast.mjs"],
-                text: "检查完成：正文对比度 15.8:1，次级文字 #94a3b8 在 #0f172a 背景上达到 7.1:1，全部满足 WCAG AA/AAA 要求。",
-                diff: [
-                  "@@ -11,4 +11,4 @@ :root {",
-                  "-  --muted-text: #64748b;",
-                  "+  --muted-text: #94a3b8;",
-                  " }"
-                ]
-              }
-            ]
-          },
-          {
-            id: "s3",
-            title: "Windows 路径兼容修复",
-            path: "~/code/cli-tools",
-            branch: "fix/win-path-sep",
-            updated: "1 小时前",
-            messages: [
-              {
-                role: "user",
-                text: "统一配置解析中的路径分隔符，避免 Windows 下出现反斜杠匹配失败。"
-              },
-              {
-                role: "assistant",
-                tools: ["read_file src/paths.mjs", "edit_file src/paths.mjs", "node --test"],
-                text: "已将相对路径统一归一化为 POSIX 斜杠，并补充 Windows 路径用例验证通过。",
-                diff: [
-                  "@@ -18,3 +18,3 @@ export function normalizeRel(p) {",
-                  "-  return path.normalize(p);",
-                  "+  return path.posix.normalize(p.replaceAll(\"\\\\\", \"/\"));",
-                  " }"
-                ]
-              }
-            ]
-          }
-        ];
-      }
-
-      const timers = new Set();
-      function scheduleTimer(fn, ms) {
-        const id = setTimeout(() => {
-          timers.delete(id);
-          fn();
-        }, ms);
-        timers.add(id);
-        return id;
-      }
-      function clearAllTimers() {
-        for (const id of timers) clearTimeout(id);
-        timers.clear();
-      }
-
-      let state = null;
-
-      function createFreshState() {
-        return {
-          step: "onboarding",
-          theme: "dark",
-          os: "macos",
-          hostOnlineSimulating: false,
-          hostOnlineDone: false,
-          unlocked: false,
-          rememberKey: true,
-          unlockNotice: "",
-          unlockError: "",
-          wbTab: "chat",
-          transport: "p2p",
-          filter: "",
-          activeSessionId: "s1",
-          sessions: createInitialSessions(),
-          cacheVersion: 1,
-          cacheSyncedAt: "刚刚",
-          reconnecting: false
-        };
-      }
-
       const $ = (id) => document.getElementById(id);
-
+      const metaColorScheme = document.querySelector('meta[name="color-scheme"]');
       let toastTimer = null;
-      let lastToastMessage = "";
-      const copyBtnTimers = new WeakMap();
 
-      function showToast(text) {
-        const el = $("demo-toast");
-        let msg = text;
-        if (msg === lastToastMessage) msg += "\u00A0";
-        lastToastMessage = msg;
-        if (toastTimer) {
-          clearTimeout(toastTimer);
-          timers.delete(toastTimer);
-        }
+      function showToast(msg) {
+        const el = $('dsh-toast');
         el.textContent = msg;
-        el.classList.add("is-show");
-        toastTimer = scheduleTimer(() => {
-          el.classList.remove("is-show");
-          toastTimer = null;
-        }, 2000);
+        el.classList.add('is-show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => el.classList.remove('is-show'), 2200);
       }
 
-      function selectCommandElement(codeEl) {
-        if (!codeEl) return "";
-        const range = document.createRange();
-        range.selectNodeContents(codeEl);
-        const sel = window.getSelection();
-        if (!sel) return "";
-        sel.removeAllRanges();
-        sel.addRange(range);
-        return sel.toString().trim();
-      }
-
-      function safeCopy(text, targetCodeEl, btn, idleLabel) {
-        const finish = (copied) => {
-          if (btn) {
-            const prevTimer = copyBtnTimers.get(btn);
-            if (prevTimer) {
-              clearTimeout(prevTimer);
-              timers.delete(prevTimer);
-            }
-            btn.textContent = copied ? "已复制命令" : "已选中（按 Ctrl/Cmd+C）";
-            const nextTimer = scheduleTimer(() => {
-              btn.textContent = idleLabel;
-              copyBtnTimers.delete(btn);
-            }, 2000);
-            copyBtnTimers.set(btn, nextTimer);
-          }
-          showToast(copied ? "已复制命令" : "已选中命令（按 Ctrl/Cmd+C 复制）");
-        };
-
-        const fallbackSelectAndCopy = () => {
-          selectCommandElement(targetCodeEl);
-          let ok = false;
-          try {
-            if (typeof document.execCommand === "function") {
-              ok = Boolean(document.execCommand("copy"));
-            }
-          } catch {
-            ok = false;
-          }
-          selectCommandElement(targetCodeEl);
-          finish(ok);
-        };
-
-        const canUseAsyncClipboard =
-          window.origin !== "null" &&
-          window.isSecureContext &&
-          typeof navigator !== "undefined" &&
-          navigator.clipboard &&
-          typeof navigator.clipboard.writeText === "function";
-
-        if (canUseAsyncClipboard) {
-          navigator.clipboard.writeText(text).then(
-            () => {
-              selectCommandElement(targetCodeEl);
-              finish(true);
-            },
-            () => {
-              fallbackSelectAndCopy();
-            }
-          );
-          return;
-        }
-
-        fallbackSelectAndCopy();
-      }
-
-      function setStep(nextStep) {
-        state.step = nextStep;
-        for (const viewId of ["onboarding", "unlock", "workbench", "offline"]) {
-          const el = $("view-" + viewId);
-          el.classList.toggle("is-active", viewId === nextStep);
-        }
-        for (const btn of document.querySelectorAll(".step-btn")) {
-          if (btn.dataset.step === nextStep) {
-            btn.setAttribute("aria-current", "step");
+      async function copyText(text, label) {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
           } else {
-            btn.removeAttribute("aria-current");
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
           }
-        }
-        renderCurrentView();
-      }
-
-      function renderTheme() {
-        document.documentElement.setAttribute("data-theme", state.theme);
-        $("theme-toggle-btn").textContent = state.theme === "dark" ? "浅色" : "深色";
-      }
-
-      function renderOnboarding() {
-        for (const tab of document.querySelectorAll("#os-tablist [role='tab']")) {
-          const selected = tab.dataset.os === state.os;
-          tab.setAttribute("aria-selected", selected ? "true" : "false");
-          tab.tabIndex = selected ? 0 : -1;
-        }
-        $("os-tabpanel").setAttribute("aria-labelledby", "tab-" + state.os);
-        $("onboarding-cmd").textContent = DEMO_CMD;
-        $("onboarding-os-hint").textContent = OS_INFO[state.os].hint;
-        $("term-title").textContent = OS_INFO[state.os].termTitle;
-
-        const waitBar = $("onboarding-wait-bar");
-        const waitText = $("onboarding-wait-text");
-        const simBtn = $("simulate-online-btn");
-        const relayNode = $("topo-relay-node");
-        const hostNode = $("topo-host-node");
-        const hostSub = $("topo-host-sub");
-        const topoTag = $("topo-state-tag");
-
-        if (state.hostOnlineDone) {
-          waitBar.classList.add("is-online");
-          waitText.textContent = "已检测到主机 \"Studio-MacBook-Pro\" 上线！正在进入解锁界面…";
-          simBtn.disabled = true;
-          simBtn.textContent = "主机已上线 (host_online)";
-          relayNode.classList.add("is-active");
-          hostNode.classList.add("is-active");
-          hostSub.textContent = "Studio-MacBook-Pro";
-          topoTag.textContent = "event: host_online";
-        } else if (state.hostOnlineSimulating) {
-          waitBar.classList.remove("is-online");
-          waitText.textContent = "正在检测 Node >= 24.9.0、安装双插件并写入动态绑定策略…";
-          simBtn.disabled = true;
-          simBtn.textContent = "正在模拟上线…";
-          relayNode.classList.add("is-active");
-          hostNode.classList.remove("is-active");
-          hostSub.textContent = "配置中…";
-          topoTag.textContent = "state: binding_policy";
-        } else {
-          waitBar.classList.remove("is-online");
-          waitText.textContent = "正在等待你的电脑完成配置并上线…（上线后自动进入解锁页）";
-          simBtn.disabled = false;
-          simBtn.textContent = "模拟本机完成配置并上线";
-          relayNode.classList.remove("is-active");
-          hostNode.classList.remove("is-active");
-          hostSub.textContent = "待运行 npx";
-          topoTag.textContent = "state: waiting_host";
+          showToast(label + ' 已复制到剪贴板');
+        } catch (_) {
+          showToast('演示环境已准备复制内容：' + label);
         }
       }
 
-      function setTerminalLines(lines) {
-        const box = $("term-log");
-        box.textContent = "";
-        for (const item of lines) {
-          const row = document.createElement("div");
-          row.className = item.cls || "";
-          row.textContent = item.text;
-          box.appendChild(row);
+      // Theme toggle (light -> dark -> system, synced via <meta name="color-scheme">)
+      const THEME_STORAGE_KEY = 'dsh-tiana-remote-preview-scheme';
+      function getSchemeContent() {
+        return metaColorScheme.getAttribute('content') || 'light';
+      }
+      function updateThemeButton() {
+        const current = getSchemeContent();
+        const labelEl = $('theme-label');
+        if (current === 'dark') labelEl.textContent = '深色模式';
+        else if (current === 'light') labelEl.textContent = '浅色模式';
+        else labelEl.textContent = '跟随系统';
+      }
+      function applyScheme(next) {
+        metaColorScheme.setAttribute('content', next);
+        try {
+          if (next === 'light dark') localStorage.removeItem(THEME_STORAGE_KEY);
+          else localStorage.setItem(THEME_STORAGE_KEY, next);
+        } catch (_) {}
+        updateThemeButton();
+      }
+      $('btn-theme-toggle').addEventListener('click', () => {
+        const cur = getSchemeContent();
+        const next = cur === 'light' ? 'dark' : cur === 'dark' ? 'light dark' : 'light';
+        applyScheme(next);
+        showToast(next === 'dark' ? '已切换至深色模式' : next === 'light' ? '已切换至浅色模式' : '已切换为跟随系统配色');
+      });
+      window.addEventListener('storage', (ev) => {
+        if (ev.key === THEME_STORAGE_KEY) {
+          metaColorScheme.setAttribute('content', ev.newValue || 'light dark');
+          updateThemeButton();
+        }
+      });
+
+      // View switcher
+      function switchView(viewName) {
+        state.view = viewName;
+        for (const tab of document.querySelectorAll('.dsh-mode-tabs[aria-label="视图模式切换"] .dsh-mode-tab')) {
+          const active = tab.dataset.view === viewName;
+          tab.setAttribute('aria-selected', active ? 'true' : 'false');
+        }
+        for (const panel of document.querySelectorAll('.dsh-view')) {
+          panel.classList.toggle('is-active', panel.id === 'view-' + viewName);
         }
       }
-
-      function renderUnlock() {
-        const noticeEl = $("unlock-notice");
-        const errEl = $("unlock-error");
-        const keyInput = $("unlock-key-input");
-        if (state.unlockNotice) {
-          noticeEl.textContent = state.unlockNotice;
-          noticeEl.hidden = false;
-        } else {
-          noticeEl.hidden = true;
-        }
-        if (state.unlockError) {
-          errEl.textContent = state.unlockError;
-          errEl.hidden = false;
-          keyInput.setAttribute("aria-invalid", "true");
-          keyInput.setAttribute("aria-describedby", "unlock-error");
-        } else {
-          errEl.hidden = true;
-          keyInput.setAttribute("aria-invalid", "false");
-          keyInput.removeAttribute("aria-describedby");
-        }
-        $("remember-key-checkbox").checked = state.rememberKey;
+      for (const tab of document.querySelectorAll('.dsh-mode-tabs[aria-label="视图模式切换"] .dsh-mode-tab')) {
+        tab.addEventListener('click', () => switchView(tab.dataset.view));
       }
 
-      function renderTransportBadges() {
-        const isP2p = state.transport === "p2p";
-        const label = isP2p ? "WebRTC P2P 点对点直连 · 6ms" : "Tiana Relay 加密中继 · 28ms";
-        $("header-conn-text").textContent = label;
-        $("header-conn-dot").classList.toggle("is-relay", !isP2p);
-        $("rail-conn-dot").classList.toggle("is-relay", !isP2p);
-        $("panel-live-text").textContent = label;
-        $("panel-live-dot").classList.toggle("is-relay", !isP2p);
-        $("metric-channel").textContent = isP2p ? "WebRTC P2P 直连" : "Tiana Relay 中继";
-        $("metric-rtt").textContent = isP2p ? "6 ms" : "28 ms";
-        $("metric-fp").textContent = DEMO_FP;
-        $("mode-p2p-btn").classList.toggle("btn-primary", isP2p);
-        $("mode-relay-btn").classList.toggle("btn-primary", !isP2p);
-        $("remember-state-badge").textContent = state.rememberKey
-          ? "密钥策略：已记住于本页内存"
-          : "密钥策略：仅当前会话内存有效";
-        $("cache-sync-status").textContent = "模块缓存：已同步 v0.2.9 · " + state.cacheSyncedAt;
-      }
+      // Render dynamic state
+      function renderAll() {
+        $('remote-url-box').textContent = DEMO_URL;
+        $('remote-url-box').title = DEMO_URL;
 
-      function renderSessions() {
-        const q = state.filter.trim().toLowerCase();
-        const filtered = state.sessions.filter((s) => {
-          if (!q) return true;
-          return s.title.toLowerCase().includes(q) || s.path.toLowerCase().includes(q) || s.branch.toLowerCase().includes(q);
-        });
-        $("session-count-badge").textContent = filtered.length + " / " + state.sessions.length;
+        $('sidebar-host-name').textContent = state.hostName;
+        $('hero-host-label').textContent = state.hostName;
+        $('remote-host-label').textContent = state.hostName;
 
-        const listEl = $("session-list");
-        listEl.textContent = "";
-        if (!filtered.length) {
-          const empty = document.createElement("div");
-          empty.className = "dsh-shell-sub";
-          empty.style.fontSize = "12px";
-          empty.textContent = "未匹配到符合条件的工作区会话";
+        const online = state.enabled;
+        $('sidebar-live-dot').classList.toggle('is-paused', !online);
+        $('topbar-status-dot').classList.toggle('is-paused', !online);
+        $('metric-dot').classList.toggle('is-paused', !online);
+
+        const modeName = state.p2pEnabled ? 'WebRTC P2P 直连' : 'Tiana Relay 加密中继';
+        const shortMode = state.p2pEnabled ? 'P2P' : 'Relay';
+        const rtt = state.p2pEnabled ? '14 ms' : '29 ms';
+
+        $('topbar-status-text').textContent = online
+          ? '在线运行中 · ' + shortMode + ' ' + rtt
+          : '已暂停监听';
+        $('metric-channel').textContent = online ? (modeName + ' · ' + rtt) : '远程桥已暂停';
+        $('sidebar-host-badge').textContent = online ? shortMode : '暂停';
+        $('relay-status-badge').textContent = online ? 'Relay 已连接' : '已暂停';
+
+        $('metric-fingerprint').textContent = state.fingerprint;
+        $('key-fp-badge').textContent = '指纹 ' + state.fingerprint;
+        $('remote-fp-badge').textContent = '密钥指纹: ' + state.fingerprint;
+        $('metric-token-expiry').textContent = '剩余 ' + state.tokenDays + ' 天（自动续期）';
+
+        $('pairing-key-display').textContent = state.keyRevealed
+          ? DEMO_KEY_PREFIX + state.keyBody
+          : DEMO_KEY_PREFIX + '••••••••••••••••••••••••••••';
+        $('btn-reveal-key').textContent = state.keyRevealed ? '隐藏密钥' : '显示密钥';
+
+        // Sessions
+        $('sessions-heading').textContent = '活跃远端会话 (' + state.sessions.length + ')';
+        $('btn-disconnect-all').disabled = state.sessions.length === 0;
+        const listEl = $('sessions-list');
+        listEl.replaceChildren();
+        if (state.sessions.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'dsh-session-item';
+          empty.innerHTML = '<span class="dsh-card-sub">当前没有活跃的远端浏览器会话</span>';
           listEl.appendChild(empty);
-          return;
-        }
-        for (const s of filtered) {
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "session-item" + (s.id === state.activeSessionId ? " is-active" : "");
-          btn.dataset.sessionId = s.id;
-
-          const name = document.createElement("div");
-          name.className = "session-name";
-          name.textContent = s.title;
-
-          const p = document.createElement("div");
-          p.className = "session-path";
-          p.textContent = s.path;
-
-          const meta = document.createElement("div");
-          meta.className = "session-meta";
-          const br = document.createElement("span");
-          br.textContent = s.branch;
-          const up = document.createElement("span");
-          up.textContent = s.updated;
-          meta.append(br, up);
-
-          btn.append(name, p, meta);
-          btn.addEventListener("click", () => {
-            state.activeSessionId = s.id;
-            renderSessions();
-            renderActiveChat();
-          });
-          listEl.appendChild(btn);
-        }
-      }
-
-      function renderActiveChat() {
-        const session = state.sessions.find((s) => s.id === state.activeSessionId) || state.sessions[0];
-        if (!session) return;
-        $("active-session-title").textContent = session.title;
-        $("active-session-path").textContent = session.path;
-        $("active-session-branch").textContent = session.branch;
-
-        const container = $("chat-messages");
-        container.textContent = "";
-        for (const m of session.messages) {
-          const wrap = document.createElement("article");
-          wrap.className = "msg" + (m.role === "user" ? " is-user" : "");
-
-          const roleEl = document.createElement("div");
-          roleEl.className = "msg-role";
-          roleEl.textContent = m.role === "user" ? "你 · 远端浏览器" : "DeepSeek Harness · Studio-MacBook-Pro";
-
-          const bubble = document.createElement("div");
-          bubble.className = "msg-bubble";
-
-          if (Array.isArray(m.tools) && m.tools.length) {
-            const toolRow = document.createElement("div");
-            toolRow.className = "tool-row";
-            for (const t of m.tools) {
-              const chip = document.createElement("span");
-              chip.className = "tool-chip";
-              chip.textContent = t;
-              toolRow.appendChild(chip);
-            }
-            bubble.appendChild(toolRow);
-          }
-
-          const body = document.createElement("div");
-          body.textContent = m.text;
-          bubble.appendChild(body);
-
-          if (Array.isArray(m.diff) && m.diff.length) {
-            const diffEl = document.createElement("div");
-            diffEl.className = "diff-box";
-            for (const line of m.diff) {
-              const span = document.createElement("div");
-              if (line.startsWith("+")) span.className = "diff-add";
-              else if (line.startsWith("-")) span.className = "diff-del";
-              else if (line.startsWith("@@")) span.className = "diff-head";
-              span.textContent = line;
-              diffEl.appendChild(span);
-            }
-            bubble.appendChild(diffEl);
-          }
-
-          wrap.append(roleEl, bubble);
-          container.appendChild(wrap);
-        }
-        container.scrollTop = container.scrollHeight;
-      }
-
-      function renderWorkbench() {
-        const isChat = state.wbTab === "chat";
-        $("rail-chat-btn").setAttribute("aria-selected", isChat ? "true" : "false");
-        $("rail-remote-btn").setAttribute("aria-selected", !isChat ? "true" : "false");
-        $("wb-panel-chat").hidden = !isChat;
-        $("wb-panel-remote").hidden = isChat;
-        $("session-filter-input").value = state.filter;
-        renderTransportBadges();
-        renderSessions();
-        renderActiveChat();
-      }
-
-      function renderCurrentView() {
-        renderTheme();
-        if (state.step === "onboarding") renderOnboarding();
-        else if (state.step === "unlock") renderUnlock();
-        else if (state.step === "workbench") renderWorkbench();
-      }
-
-      function triggerReconnectCapsule() {
-        const banner = $("dsh-remote-reconnect-banner");
-        const text = $("reconnect-banner-text");
-        state.reconnecting = true;
-        text.textContent = "正在重连至 Studio-MacBook-Pro…";
-        banner.classList.add("is-visible");
-        scheduleTimer(() => {
-          text.textContent = "已恢复连接（" + (state.transport === "p2p" ? "WebRTC P2P · 6ms" : "Relay · 28ms") + "）";
-          scheduleTimer(() => {
-            state.reconnecting = false;
-            banner.classList.remove("is-visible");
-          }, 1100);
-        }, 1200);
-      }
-
-      function hideReconnectCapsule() {
-        state.reconnecting = false;
-        $("dsh-remote-reconnect-banner").classList.remove("is-visible");
-      }
-
-      function sendDemoPrompt(promptText) {
-        const clean = promptText.trim();
-        if (!clean) return;
-        const session = state.sessions.find((s) => s.id === state.activeSessionId) || state.sessions[0];
-        if (!session) return;
-        session.messages.push({ role: "user", text: clean });
-        session.updated = "刚刚";
-        renderSessions();
-        renderActiveChat();
-
-        const reply = {
-          role: "assistant",
-          tools: [
-            "e2ee_tunnel (" + (state.transport === "p2p" ? "P2P 6ms" : "Relay 28ms") + ")",
-            "workspace_exec " + session.path
-          ],
-          text: "已在本地工作区 " + session.path + " 执行示例指令「" + clean + "」：变更核验通过，0 处回归问题（示例模拟响应）。",
-          diff: [
-            "@@ -1,2 +1,4 @@ // 示例本地执行摘要 (" + session.branch + ")",
-            "- status: pending_check",
-            "+ status: verified_clean (tests: 18/18 passed)",
-            "+ transport: " + (state.transport === "p2p" ? "WebRTC P2P Direct (E2EE)" : "Tiana Relay (E2EE)")
-          ]
-        };
-        scheduleTimer(() => {
-          session.messages.push(reply);
-          renderActiveChat();
-        }, 180);
-      }
-
-      function resetDemoState(silent) {
-        clearAllTimers();
-        toastTimer = null;
-        $("demo-toast").classList.remove("is-show");
-        $("copy-cmd-btn").textContent = "复制命令";
-        $("copy-rebind-btn").textContent = "复制换绑命令";
-        copyBtnTimers.delete($("copy-cmd-btn"));
-        copyBtnTimers.delete($("copy-rebind-btn"));
-        state = createFreshState();
-        hideReconnectCapsule();
-        $("unlock-key-input").value = "";
-        $("unlock-key-input").type = "password";
-        $("unlock-key-input").setAttribute("aria-invalid", "false");
-        $("unlock-key-input").removeAttribute("aria-describedby");
-        $("toggle-key-vis-btn").textContent = "显示";
-        $("chat-composer-input").value = "";
-        if (window.getSelection) {
-          const sel = window.getSelection();
-          if (sel) sel.removeAllRanges();
-        }
-        setTerminalLines([
-          { cls: "t-dim", text: "# 在你的电脑上执行向导命令：" },
-          { cls: "t-cmd", text: "$ " + DEMO_CMD },
-          { cls: "t-dim", text: "▸ 等待点击左侧「模拟本机完成配置并上线」演示完整握手…" }
-        ]);
-        setStep("onboarding");
-        if (!silent) showToast("已恢复初始示例状态");
-      }
-
-      // Wire top stepper
-      for (const btn of document.querySelectorAll(".step-btn")) {
-        btn.addEventListener("click", () => {
-          const target = btn.dataset.step;
-          if (target === "workbench") state.unlocked = true;
-          setStep(target);
-        });
-      }
-
-      // Theme toggle
-      $("theme-toggle-btn").addEventListener("click", () => {
-        state.theme = state.theme === "dark" ? "light" : "dark";
-        renderTheme();
-      });
-
-      // Reset demo button
-      $("demo-reset-btn").addEventListener("click", () => resetDemoState(false));
-
-      // OS tabs (click + ArrowLeft/ArrowRight keyboard support)
-      const osTabs = Array.from(document.querySelectorAll("#os-tablist [role='tab']"));
-      for (const tab of osTabs) {
-        tab.addEventListener("click", () => {
-          state.os = tab.dataset.os;
-          renderOnboarding();
-        });
-        tab.addEventListener("keydown", (ev) => {
-          if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
-            ev.preventDefault();
-            const idx = osTabs.indexOf(tab);
-            const next = osTabs[(idx + (ev.key === "ArrowRight" ? 1 : -1) + osTabs.length) % osTabs.length];
-            state.os = next.dataset.os;
-            renderOnboarding();
-            next.focus();
-          }
-        });
-      }
-
-      $("copy-cmd-btn").addEventListener("click", () => safeCopy(DEMO_CMD, $("onboarding-cmd"), $("copy-cmd-btn"), "复制命令"));
-      $("copy-rebind-btn").addEventListener("click", () => safeCopy(DEMO_REBIND_CMD, $("rebind-cmd"), $("copy-rebind-btn"), "复制换绑命令"));
-
-      // Simulate host online transition
-      $("simulate-online-btn").addEventListener("click", () => {
-        if (state.hostOnlineSimulating || state.hostOnlineDone) return;
-        state.hostOnlineSimulating = true;
-        renderOnboarding();
-        setTerminalLines([
-          { cls: "t-cmd", text: "$ " + DEMO_CMD },
-          { cls: "t-ok", text: "✓ Step 1/6 Node.js v24.11.0 满足要求 (>= 24.9.0)" },
-          { cls: "t-ok", text: "✓ Step 2/6 检测到已有 DSH，保留现有工作区与对话" },
-          { cls: "t-ok", text: "✓ Step 3/6 已启用 @tianacloud/dsh-tiana 与 @tianacloud/dsh-remote" },
-          { cls: "t-warn", text: "▸ Step 4/6 正在向 Relay Function 写入 DSH_REMOTE_POLICY…" }
-        ]);
-        scheduleTimer(() => {
-          state.hostOnlineSimulating = false;
-          state.hostOnlineDone = true;
-          renderOnboarding();
-          setTerminalLines([
-            { cls: "t-cmd", text: "$ " + DEMO_CMD },
-            { cls: "t-ok", text: "✓ Step 1-4 环境校验与动态策略绑定完成（免重编译）" },
-            { cls: "t-ok", text: "✓ Step 5/6 已签发 30 天主机 Token 并写入 state.json (0600)" },
-            { cls: "t-ok", text: "✓ Step 6/6 配对密钥已复制到剪贴板 · 指纹 " + DEMO_FP },
-            { cls: "t-ok", text: "● Relay 实时广播 host_online -> Studio-MacBook-Pro" }
-          ]);
-          scheduleTimer(() => {
-            state.unlockNotice = "主机 Studio-MacBook-Pro 已上线！可点击「一键填入示例密钥」体验 E2EE 解锁。";
-            state.unlockError = "";
-            setStep("unlock");
-          }, 650);
-        }, 420);
-      });
-
-      $("jump-workbench-btn").addEventListener("click", () => {
-        state.unlocked = true;
-        setStep("workbench");
-      });
-
-      // Unlock interactions
-      $("toggle-key-vis-btn").addEventListener("click", () => {
-        const input = $("unlock-key-input");
-        const showing = input.type === "text";
-        input.type = showing ? "password" : "text";
-        $("toggle-key-vis-btn").textContent = showing ? "显示" : "隐藏";
-      });
-
-      $("fill-demo-key-btn").addEventListener("click", () => {
-        $("unlock-key-input").value = DEMO_KEY;
-        state.unlockError = "";
-        renderUnlock();
-        showToast("已填入示例配对密钥（dshk1_ 前缀）");
-      });
-
-      $("unlock-key-input").addEventListener("input", () => {
-        if (state.unlockError) {
-          state.unlockError = "";
-          renderUnlock();
-        }
-      });
-
-      $("remember-key-checkbox").addEventListener("change", (ev) => {
-        state.rememberKey = ev.target.checked;
-      });
-
-      $("unlock-back-btn").addEventListener("click", () => setStep("onboarding"));
-
-      function submitUnlock() {
-        const val = $("unlock-key-input").value.trim();
-        if (!VALID_KEY_RE.test(val)) {
-          state.unlockError = "配对密钥格式无效：请输入 dshk1_ 开头的配对密钥或 43 位 Base64URL 密钥";
-          renderUnlock();
-          $("unlock-key-input").focus();
-          return;
-        }
-        state.unlockError = "";
-        state.unlockNotice = "";
-        state.unlocked = true;
-        state.rememberKey = $("remember-key-checkbox").checked;
-        $("unlock-key-input").value = "";
-        state.wbTab = "chat";
-        setStep("workbench");
-        showToast("示例演示：已模拟 ECDH P-256 + HKDF-SHA256 + AES-256-GCM 握手解锁");
-      }
-
-      $("unlock-submit-btn").addEventListener("click", submitUnlock);
-      $("unlock-key-input").addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter") {
-          ev.preventDefault();
-          submitUnlock();
-        }
-      });
-
-      // Workbench rail tabs
-      for (const btn of document.querySelectorAll(".rail-btn")) {
-        btn.addEventListener("click", () => {
-          state.wbTab = btn.dataset.wbTab;
-          renderWorkbench();
-        });
-      }
-
-      $("header-conn-pill").addEventListener("click", () => {
-        state.wbTab = "remote";
-        renderWorkbench();
-      });
-
-      $("session-filter-input").addEventListener("input", (ev) => {
-        state.filter = ev.target.value;
-        renderSessions();
-      });
-
-      for (const chip of document.querySelectorAll(".chip-btn")) {
-        chip.addEventListener("click", () => {
-          sendDemoPrompt(chip.dataset.prompt || "");
-        });
-      }
-
-      function submitComposer() {
-        const input = $("chat-composer-input");
-        const val = input.value;
-        if (!val.trim()) return;
-        input.value = "";
-        sendDemoPrompt(val);
-      }
-
-      $("chat-send-btn").addEventListener("click", submitComposer);
-      $("chat-composer-input").addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter") {
-          ev.preventDefault();
-          submitComposer();
-        }
-      });
-
-      // Tiana Remote panel controls
-      $("mode-p2p-btn").addEventListener("click", () => {
-        state.transport = "p2p";
-        renderTransportBadges();
-        showToast("已切换为 WebRTC P2P 点对点直连 · 6ms");
-      });
-
-      $("mode-relay-btn").addEventListener("click", () => {
-        state.transport = "relay";
-        renderTransportBadges();
-        showToast("已切换模拟 Tiana Relay 加密中继 · 28ms");
-      });
-
-      $("refresh-cache-btn").addEventListener("click", () => {
-        state.cacheVersion += 1;
-        state.cacheSyncedAt = "已刷新 (#" + state.cacheVersion + ")";
-        renderTransportBadges();
-        showToast("已清理远程前端模块缓存并重新同步");
-      });
-
-      $("trigger-reconnect-btn").addEventListener("click", () => {
-        triggerReconnectCapsule();
-      });
-
-      $("simulate-offline-btn").addEventListener("click", () => {
-        hideReconnectCapsule();
-        setStep("offline");
-      });
-
-      function lockWorkbench() {
-        hideReconnectCapsule();
-        state.unlocked = false;
-        state.rememberKey = false;
-        state.unlockNotice = "已锁定工作台并清除本页内存中的配对密钥，请重新输入密钥解锁。";
-        state.unlockError = "";
-        $("unlock-key-input").value = "";
-        setStep("unlock");
-      }
-
-      $("lock-workbench-btn").addEventListener("click", lockWorkbench);
-      $("reconnect-lock-btn").addEventListener("click", lockWorkbench);
-
-      // Offline view controls
-      $("recover-online-btn").addEventListener("click", () => {
-        if (state.unlocked || state.rememberKey) {
-          state.unlocked = true;
-          setStep("workbench");
-          triggerReconnectCapsule();
         } else {
-          state.unlockNotice = "主机 Studio-MacBook-Pro 已恢复上线，请输入配对密钥解锁。";
-          state.unlockError = "";
-          setStep("unlock");
+          for (const s of state.sessions) {
+            const item = document.createElement('div');
+            item.className = 'dsh-session-item';
+            const meta = document.createElement('div');
+            meta.className = 'dsh-session-meta';
+            const name = document.createElement('div');
+            name.className = 'dsh-session-name';
+            name.textContent = s.name;
+            const sub = document.createElement('div');
+            sub.className = 'dsh-session-sub';
+            sub.textContent = s.transport + ' · RTT ' + s.rttMs + ' ms · ' + s.duration;
+            meta.append(name, sub);
+
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'dsh-btn dsh-btn-danger dsh-btn-sm';
+            btn.textContent = '断开';
+            btn.addEventListener('click', () => {
+              state.sessions = state.sessions.filter((x) => x.id !== s.id);
+              renderAll();
+              showToast('已断开远端会话：' + s.name);
+            });
+            item.append(meta, btn);
+            listEl.appendChild(item);
+          }
+        }
+      }
+
+      // Deterministic visual QR matrix (clean scannable-style SVG for demo URL)
+      function renderQrSvg(seedText) {
+        const size = 25;
+        const quiet = 3;
+        const total = size + quiet * 2;
+        const mat = Array.from({ length: size }, () => Array(size).fill(false));
+        const markFinder = (r0, c0) => {
+          for (let dr = -1; dr <= 7; dr++) {
+            for (let dc = -1; dc <= 7; dc++) {
+              const r = r0 + dr, c = c0 + dc;
+              if (r < 0 || r >= size || c < 0 || c >= size) continue;
+              const inBox = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6;
+              const border = dr === 0 || dr === 6 || dc === 0 || dc === 6;
+              const core = dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4;
+              mat[r][c] = inBox && (border || core);
+            }
+          }
+        };
+        markFinder(0, 0);
+        markFinder(0, size - 7);
+        markFinder(size - 7, 0);
+        for (let i = 8; i < size - 8; i++) {
+          mat[6][i] = i % 2 === 0;
+          mat[i][6] = i % 2 === 0;
+        }
+        let h = 2166136261;
+        for (let i = 0; i < seedText.length; i++) {
+          h ^= seedText.charCodeAt(i);
+          h = Math.imul(h, 16777619);
+        }
+        for (let r = 0; r < size; r++) {
+          for (let c = 0; c < size; c++) {
+            const inFinder = (r < 8 && c < 8) || (r < 8 && c >= size - 8) || (r >= size - 8 && c < 8);
+            if (inFinder || r === 6 || c === 6) continue;
+            h ^= (r * 31 + c * 17);
+            h = Math.imul(h, 16777619);
+            mat[r][c] = ((h >>> 0) % 100) < 48;
+          }
+        }
+        const parts = [];
+        for (let r = 0; r < size; r++) {
+          for (let c = 0; c < size; c++) {
+            if (mat[r][c]) parts.push('M' + (c + quiet) + ',' + (r + quiet) + 'h1v1h-1z');
+          }
+        }
+        const svgNS = ['http:', '//www.w3.org/2000/svg'].join('');
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '0 0 ' + total + ' ' + total);
+        svg.setAttribute('width', '196');
+        svg.setAttribute('height', '196');
+        svg.setAttribute('shape-rendering', 'crispEdges');
+        svg.style.borderRadius = '12px';
+        svg.style.border = '1px solid var(--border-l2)';
+        const bg = document.createElementNS(svgNS, 'rect');
+        bg.setAttribute('width', String(total));
+        bg.setAttribute('height', String(total));
+        bg.setAttribute('fill', '#ffffff');
+        const path = document.createElementNS(svgNS, 'path');
+        path.setAttribute('d', parts.join(''));
+        path.setAttribute('fill', '#061a36');
+        svg.append(bg, path);
+        $('qr-container').replaceChildren(svg);
+      }
+
+      // Wire interactive controls
+      $('toggle-remote-enabled').addEventListener('change', (e) => {
+        state.enabled = e.target.checked;
+        renderAll();
+        showToast(state.enabled ? '已启用远程访问监听' : '已暂停远程访问监听');
+      });
+
+      $('btn-copy-url').addEventListener('click', () => copyText(DEMO_URL, '托管访问地址'));
+      $('btn-open-remote-preview').addEventListener('click', () => {
+        switchView('remote');
+        showToast('已切换至远端隧道受限视图');
+      });
+
+      $('btn-show-qr').addEventListener('click', () => {
+        renderQrSvg(DEMO_URL);
+        $('dialog-qr').showModal();
+      });
+
+      $('btn-open-topo').addEventListener('click', () => $('dialog-topo').showModal());
+      $('btn-open-topo-foot').addEventListener('click', () => $('dialog-topo').showModal());
+
+      $('btn-renew-token').addEventListener('click', () => {
+        state.tokenDays = 30;
+        renderAll();
+        showToast('Function 实例 Token 已续期（30 天有效）');
+      });
+
+      $('btn-reveal-key').addEventListener('click', () => {
+        state.keyRevealed = !state.keyRevealed;
+        renderAll();
+      });
+
+      $('btn-copy-key').addEventListener('click', () => {
+        copyText(DEMO_KEY_PREFIX + state.keyBody, '端到端配对密钥');
+      });
+
+      $('btn-rotate-key').addEventListener('click', () => $('dialog-rotate').showModal());
+
+      $('dialog-rotate').addEventListener('close', (e) => {
+        const dialog = e.currentTarget;
+        const val = dialog.returnValue;
+        dialog.returnValue = '';
+        if (val === 'confirm') {
+          const hex = () => Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0');
+          state.fingerprint = hex() + ':' + hex() + ':' + hex();
+          const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+          let nextBody = '';
+          for (let i = 0; i < 43; i++) nextBody += alphabet[Math.floor(Math.random() * alphabet.length)];
+          state.keyBody = nextBody;
+          state.keyRevealed = true;
+          state.sessions = [];
+          renderAll();
+          showToast('配对密钥已轮换（4001 key_rotated），所有远端会话已断开');
         }
       });
 
-      $("offline-to-onboarding-btn").addEventListener("click", () => setStep("onboarding"));
+      for (const dlgId of ['dialog-qr', 'dialog-topo']) {
+        $(dlgId).addEventListener('close', (e) => { e.currentTarget.returnValue = ''; });
+      }
 
-      // Boot initial in-memory state
-      resetDemoState(true);
+      // Fallback light-dismiss for closedby="any" where unsupported (Safari)
+      if (!('closedBy' in HTMLDialogElement.prototype)) {
+        const outside = (e, dialog) => {
+          const r = dialog.getBoundingClientRect();
+          return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+        };
+        for (const dialog of document.querySelectorAll('dialog[closedby="any"]')) {
+          let pressedOutside = false;
+          dialog.addEventListener('pointerdown', (e) => { pressedOutside = outside(e, dialog); });
+          dialog.addEventListener('pointerup', (e) => { if (pressedOutside && outside(e, dialog)) dialog.close(); });
+        }
+      }
+
+      $('btn-disconnect-all').addEventListener('click', () => {
+        state.sessions = [];
+        renderAll();
+        showToast('已断开全部远端浏览器会话');
+      });
+
+      $('settings-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        state.hostName = $('input-hostname').value.trim() || 'my-macbook';
+        state.p2pEnabled = $('check-p2p').checked;
+        state.stunUrls = $('input-stun').value.trim() || 'stun:stun.cloudflare.com:3478';
+        renderAll();
+        showToast('主机与网络设置已保存');
+      });
+
+      $('btn-repair-shell').addEventListener('click', () => {
+        showToast('已重新同步远端静态壳层资源');
+      });
+
+      const handleClearCache = () => {
+        showToast('已清除浏览器缓存的前端资源并重新加载最新界面');
+      };
+      $('btn-local-clear-cache').addEventListener('click', handleClearCache);
+      $('btn-remote-clear-cache').addEventListener('click', handleClearCache);
+
+      const handleUnbindDevice = () => {
+        showToast('已清除当前浏览器保存的配对密钥（云端与主机绑定保持不变）');
+      };
+      $('btn-local-unbind').addEventListener('click', handleUnbindDevice);
+      $('btn-remote-unbind').addEventListener('click', handleUnbindDevice);
+
+      // Onboarding OS switcher & copy
+      const onboardCmd = 'npx --yes @tianacloud/dsh-remote@latest connect --app ' + DEMO_APP_ID + ' --space ' + DEMO_SPACE;
+      const osHints = {
+        unix: '需要 Node.js >= 24.9.0（推荐 fnm / nvm）。未装 DSH 将自动安装并幂等启用双插件，完整保留既有项目与对话。',
+        win: '需要 Node.js >= 24.9.0（推荐 winget install OpenJS.NodeJS.LTS）。自动配置本地 DSH 与云端策略。',
+      };
+      for (const btn of document.querySelectorAll('[data-os]')) {
+        btn.addEventListener('click', () => {
+          for (const b of document.querySelectorAll('[data-os]')) {
+            b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+          }
+          $('onboard-cmd-box').textContent = onboardCmd;
+          $('onboard-os-hint').textContent = osHints[btn.dataset.os];
+        });
+      }
+      $('btn-copy-onboard-cmd').addEventListener('click', () => copyText(onboardCmd, '一键绑定命令'));
+      $('btn-sim-online').addEventListener('click', () => {
+        $('onboard-wait-text').textContent = '已检测到主机 my-macbook 上线！正在进入已连接设置视图…';
+        setTimeout(() => {
+          switchView('local');
+          showToast('主机 my-macbook 已上线并建立 E2EE 通道');
+        }, 450);
+      });
+
+      // Sidebar demo interactions
+      for (const el of document.querySelectorAll('[data-nav-toast]')) {
+        el.addEventListener('click', () => showToast(el.dataset.navToast));
+      }
+      $('btn-new-session').addEventListener('click', () => showToast('当前预览聚焦 dsh-tiana-remote 设置面板'));
+      $('btn-sidebar-info').addEventListener('click', () => showToast('DeepSeek Harness 左侧栏 · 当前选中 dsh-tiana-remote'));
+      $('nav-dsh-tiana-remote').addEventListener('click', () => switchView('local'));
+
+      updateThemeButton();
+      renderAll();
     })();
   </script>
 </body>

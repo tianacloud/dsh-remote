@@ -2,7 +2,7 @@
   "name": "@tianacloud/dsh-remote",
   "version": "0.2.9",
   "type": "module",
-  "description": "使用 Tiana 能力为 DeepSeek Harness 提供零公网 IP 远程访问、侧栏管理面板、无密钥流式子资源桥接与云端一键引导插件。",
+  "description": "dsh-tiana-remote：使用 Tiana 能力为 DeepSeek Harness 提供零公网 IP 远程访问、侧栏管理面板、无密钥流式子资源桥接与云端一键引导插件。",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

@@ -2706,7 +2706,7 @@ async function runRemoteSession(container, tianaContext, shellUI, options = {}) 
       lockAndForget: forget,
     };
 
-    document.title = config.appTitle || 'DSH Remote';
+    document.title = config.appTitle || 'dsh-tiana-remote';
     const theme = frontend.theme;
     if (['light', 'dark', 'system'].includes(theme?.preference)) {
       document.documentElement.dataset.dsThemeSource = theme.preference;

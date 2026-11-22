@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote",
-  "display_name": "DSH Remote",
-  "description": "连接个人电脑上的本地 DeepSeek Harness（DSH）工作台，通过端到端加密（ECDH P-256 + HKDF-SHA256 + AES-256-GCM）与 WebRTC P2P / Relay 双通道在浏览器中远程使用本地项目与插件。",
+  "display_name": "dsh-tiana-remote",
+  "description": "连接个人电脑上的本地 DeepSeek Harness（DSH）工作台，通过端到端加密（ECDH P-256 + HKDF-SHA256 + AES-256-GCM）与 WebRTC P2P / Relay 双通道在浏览器中远程使用本地项目与插件。安装后在个人电脑终端运行 `npx --yes @tianacloud/dsh-remote@latest connect --app <appId>` 即可完成一键绑定。",
   "database_required": false,
   "web_repository": "app",
   "repositories": [
@@ -12,7 +12,7 @@
         {
           "name": "FUNCTION_ID:relay",
           "placeholder": "__TIANA_FUNCTION_RELAY_8c4e2a19__",
-          "description": "本次安装的 DSH Remote Relay 后端服务实例 ID",
+          "description": "本次安装的 dsh-tiana-remote Relay 后端服务实例 ID",
           "files": [
             "remote-config.json"
           ]
@@ -20,7 +20,7 @@
         {
           "name": "WEB_ID",
           "placeholder": "__TIANA_WEB_ID_5f3b9d02__",
-          "description": "本次安装的 DSH Remote Web 应用 ID",
+          "description": "本次安装的 dsh-tiana-remote Web 应用 ID",
           "files": [
             "remote-config.json",
             "functions/relay/main.go"
@@ -32,7 +32,7 @@
   "functions": [
     {
       "key": "relay",
-      "name": "DSH Remote Relay",
+      "name": "dsh-tiana-remote Relay",
       "repository": "app",
       "source_dir": "/functions/relay",
       "parameters": {}
@@ -42,7 +42,7 @@
     {
       "name": "FUNCTION_ID:relay",
       "placeholder": "__TIANA_FUNCTION_RELAY_8c4e2a19__",
-      "description": "本次安装的 DSH Remote Relay 后端服务实例 ID",
+      "description": "本次安装的 dsh-tiana-remote Relay 后端服务实例 ID",
       "files": [
         "remote-config.json"
       ]
@@ -50,7 +50,7 @@
     {
       "name": "WEB_ID",
       "placeholder": "__TIANA_WEB_ID_5f3b9d02__",
-      "description": "本次安装的 DSH Remote Web 应用 ID",
+      "description": "本次安装的 dsh-tiana-remote Web 应用 ID",
       "files": [
         "remote-config.json"
       ]

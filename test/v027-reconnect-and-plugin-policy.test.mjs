@@ -714,7 +714,7 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.equal(unbindBtnZh.props['aria-describedby'], 'dshr-remote-lock-forget-desc');
   assert.match(collectText(unbindDescZh), /当前设备.*浏览器/u);
   assert.match(collectText(unbindDescZh), /关联仍然存在/u);
-  assert.match(collectText(unbindDescZh), /本机电脑.*Tiana Remote/u);
+  assert.match(collectText(unbindDescZh), /本机电脑.*dsh-tiana-remote/u);
 
   clearBtnZh.props.onClick();
   unbindBtnZh.props.onClick();
@@ -741,7 +741,7 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.equal(collectText(unbindBtnEn), 'Unbind This Device');
   assert.match(collectText(unbindDescEn), /this device\/browser only/i);
   assert.match(collectText(unbindDescEn), /remains active/i);
-  assert.match(collectText(unbindDescEn), /Tiana Remote.*host computer/i);
+  assert.match(collectText(unbindDescEn), /dsh-tiana-remote.*host computer/i);
 
   // 2. Local mode: renders bridgeConflict banner and renders NO plugin policy card
   const localMount = mountPanel('local', async () => new Response(JSON.stringify({
