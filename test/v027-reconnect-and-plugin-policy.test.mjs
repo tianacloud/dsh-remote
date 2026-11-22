@@ -618,7 +618,7 @@ test('client.js omits plugin access policy UI in both remote and local views whi
     return (node.children || []).map(collectText).join(' ');
   };
 
-  function mountPanel(forceMode, fetchHandler) {
+  function mountPanel(forceMode, fetchHandler, { language = 'zh-CN', shell = null } = {}) {
     const states = [];
     const refs = [];
     const effects = [];
@@ -632,12 +632,13 @@ test('client.js omits plugin access policy UI in both remote and local views whi
         createElement: (tag) => ({ tag, id: '', textContent: '' }),
         head: { appendChild: () => {} },
       },
-      navigator: { language: 'zh-CN' },
+      navigator: { language },
       fetch: (url, opts) => fetchHandler(url, opts),
       setInterval: () => 1,
       clearInterval: () => {},
       setTimeout: () => 0,
       clearTimeout: () => {},
+      ...(shell ? { __DSH_REMOTE_SHELL__: shell } : {}),
     };
     sb.globalThis = sb;
     vm.runInNewContext(clientCode, sb);
@@ -674,14 +675,23 @@ test('client.js omits plugin access policy UI in both remote and local views whi
     return { render, flush };
   }
 
-  // 1. Remote mode: fetches ONLY /api/tiana-remote/public-status and renders NO plugin policy card
+  // 1. Remote mode (zh-CN): fetches ONLY /api/tiana-remote/public-status, renders NO plugin policy card,
+  //    renders descriptive action rows for cache reload & device unbind, and invokes shell callbacks
   const remoteFetchedUrls = [];
+  let clearCacheClicks = 0;
+  let lockForgetClicks = 0;
   const remoteMount = mountPanel('remote', async (url) => {
     remoteFetchedUrls.push(url);
     if (url === '/api/tiana-remote/public-status') {
       return new Response(JSON.stringify({ hostName: 'HostDemo', e2eeFingerprint: 'aa:bb' }), { status: 200 });
     }
     return new Response('{}', { status: 404 });
+  }, {
+    language: 'zh-CN',
+    shell: {
+      clearFrontendCache() { clearCacheClicks += 1; },
+      lockAndForget() { lockForgetClicks += 1; },
+    },
   });
 
   remoteMount.render();
@@ -689,8 +699,49 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   const rTree = remoteMount.render();
   assert.deepEqual(remoteFetchedUrls, ['/api/tiana-remote/public-status']);
   assert.equal(findById(rTree, 'dshr-plugin-access-card'), null, 'remote view must NOT render plugin access card');
-  assert.ok(findById(rTree, 'dshr-remote-clear-cache'), 'remote view must still render cache refresh button');
-  assert.ok(findById(rTree, 'dshr-remote-lock-forget'), 'remote view must still render lock & forget button');
+
+  const clearBtnZh = findById(rTree, 'dshr-remote-clear-cache');
+  const clearDescZh = findById(rTree, 'dshr-remote-clear-cache-desc');
+  const unbindBtnZh = findById(rTree, 'dshr-remote-lock-forget');
+  const unbindDescZh = findById(rTree, 'dshr-remote-lock-forget-desc');
+  assert.ok(clearBtnZh && clearDescZh, 'remote zh view must render clear-cache button and description');
+  assert.ok(unbindBtnZh && unbindDescZh, 'remote zh view must render unbind-device button and description');
+  assert.equal(collectText(clearBtnZh), '清除缓存并刷新');
+  assert.equal(clearBtnZh.props['aria-describedby'], 'dshr-remote-clear-cache-desc');
+  assert.match(collectText(clearDescZh), /升级.*DSH.*插件/u);
+  assert.match(collectText(clearDescZh), /不影响本机数据/u);
+  assert.equal(collectText(unbindBtnZh), '解除此设备绑定');
+  assert.equal(unbindBtnZh.props['aria-describedby'], 'dshr-remote-lock-forget-desc');
+  assert.match(collectText(unbindDescZh), /当前设备.*浏览器/u);
+  assert.match(collectText(unbindDescZh), /关联仍然存在/u);
+  assert.match(collectText(unbindDescZh), /本机电脑.*Tiana Remote/u);
+
+  clearBtnZh.props.onClick();
+  unbindBtnZh.props.onClick();
+  assert.equal(clearCacheClicks, 1, 'clear-cache button must invoke clearFrontendCache()');
+  assert.equal(lockForgetClicks, 1, 'unbind-device button must invoke lockAndForget()');
+
+  // 1b. Remote mode (en-US): verifies matching English labels and explanatory copy
+  const remoteEnMount = mountPanel('remote', async (url) => {
+    if (url === '/api/tiana-remote/public-status') {
+      return new Response(JSON.stringify({ hostName: 'HostDemo', e2eeFingerprint: 'aa:bb' }), { status: 200 });
+    }
+    return new Response('{}', { status: 404 });
+  }, { language: 'en-US' });
+  remoteEnMount.render();
+  await remoteEnMount.flush();
+  const rTreeEn = remoteEnMount.render();
+  const clearBtnEn = findById(rTreeEn, 'dshr-remote-clear-cache');
+  const clearDescEn = findById(rTreeEn, 'dshr-remote-clear-cache-desc');
+  const unbindBtnEn = findById(rTreeEn, 'dshr-remote-lock-forget');
+  const unbindDescEn = findById(rTreeEn, 'dshr-remote-lock-forget-desc');
+  assert.equal(collectText(clearBtnEn), 'Clear Cache & Reload');
+  assert.match(collectText(clearDescEn), /upgrading DSH or a plugin/i);
+  assert.match(collectText(clearDescEn), /not be affected/i);
+  assert.equal(collectText(unbindBtnEn), 'Unbind This Device');
+  assert.match(collectText(unbindDescEn), /this device\/browser only/i);
+  assert.match(collectText(unbindDescEn), /remains active/i);
+  assert.match(collectText(unbindDescEn), /Tiana Remote.*host computer/i);
 
   // 2. Local mode: renders bridgeConflict banner and renders NO plugin policy card
   const localMount = mountPanel('local', async () => new Response(JSON.stringify({

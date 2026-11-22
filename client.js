@@ -474,8 +474,12 @@
       remoteReconnecting: '正在重连…',
       remoteRtt: '往返延迟 (RTT)',
       remoteSecurityNote: '安全边界说明：当前处于远端隧道受限视图。配对密钥查看/轮换与主机管理接口仅限本机访问，远端隧道严格返回 403 拦截。',
-      clearCacheBtn: '刷新前端模块缓存',
-      lockForgetBtn: '锁定并清除此设备密钥',
+      clearCacheTitle: '清除缓存并刷新',
+      clearCacheBtn: '清除缓存并刷新',
+      clearCacheDesc: '当本机升级了 DSH 或某个插件后，如果远端界面仍显示旧版本或出现异常，可点击此项清除当前浏览器缓存的前端资源并重新加载最新页面（不影响本机数据，也不会清除已保存的配对密钥）。',
+      lockForgetTitle: '解除此设备绑定',
+      lockForgetBtn: '解除此设备绑定',
+      lockForgetDesc: '仅清除当前设备／浏览器中保存的配对密钥并断开连接；Tiana 云端应用与本机电脑的关联仍然存在，仍可从其他设备或重新输入配对密钥登录。如需解除或更换云端应用与主机的绑定，请在本机电脑直接打开 DSH 的「Tiana Remote」面板操作（受安全边界限制，主机绑定与密钥管理仅限本机访问）。',
       onboardTitle: '绑定或新建云端 DSH Remote 应用',
       onboardBindTab: '绑定已有 Tiana 应用',
       onboardCreateTab: '在当前空间新建 DSH Remote 应用',
@@ -566,8 +570,12 @@
       remoteReconnecting: 'Reconnecting…',
       remoteRtt: 'Round-Trip Latency (RTT)',
       remoteSecurityNote: 'Security Isolation: Pairing keys and host admin APIs are strictly blocked (403) over the remote tunnel.',
-      clearCacheBtn: 'Refresh Frontend Module Cache',
-      lockForgetBtn: 'Lock & Forget Key on This Device',
+      clearCacheTitle: 'Clear Cache & Reload',
+      clearCacheBtn: 'Clear Cache & Reload',
+      clearCacheDesc: 'If the remote interface still shows an older version or behaves unexpectedly after upgrading DSH or a plugin on your host, clear this browser’s cached frontend assets and reload the latest UI. Your local host data and saved pairing key will not be affected.',
+      lockForgetTitle: 'Unbind This Device',
+      lockForgetBtn: 'Unbind This Device',
+      lockForgetDesc: 'Clears the saved pairing key on this device/browser only and disconnects. The link between your Tiana cloud app and host computer remains active, so you can still sign in from other devices or re-enter the pairing key. To unbind or switch the cloud app on your host, open the "Tiana Remote" panel directly on your host computer (host binding and key management are restricted to local access for security isolation).',
       onboardTitle: 'Bind or Create a Tiana DSH Remote App',
       onboardBindTab: 'Bind Existing Tiana App',
       onboardCreateTab: 'Create New DSH Remote App',
@@ -679,6 +687,17 @@
         background: var(--dsw-alias-bg-layer-1, rgba(15, 23, 42, 0.45));
         border: 1px solid var(--dsw-alias-border-l1, rgba(148, 163, 184, 0.18));
       }
+      .dshr-action-list { display: grid; gap: 10px; }
+      .dshr-action-item {
+        display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+        padding: 12px 14px; border-radius: 10px;
+        background: var(--dsw-alias-bg-layer-1, rgba(15, 23, 42, 0.45));
+        border: 1px solid var(--dsw-alias-border-l1, rgba(148, 163, 184, 0.18));
+      }
+      .dshr-action-copy { flex: 1 1 260px; min-width: 0; display: grid; gap: 4px; }
+      .dshr-action-title { font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary, inherit); }
+      .dshr-action-desc { font-size: 12px; line-height: 1.55; color: var(--dsw-alias-label-secondary, #94a3b8); }
+      .dshr-action-control { flex: 0 0 auto; align-self: center; }
       .dshr-divider { height: 1px; background: var(--dsw-alias-border-l1, rgba(148, 163, 184, 0.18)); }
       .dshr-notice {
         padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;
@@ -971,19 +990,37 @@
                 h('span', { className: 'dshr-badge' }, isP2p ? t('remoteP2p') : t('remoteRelay')),
               ),
               h('div', { className: 'dshr-notice' }, t('remoteSecurityNote')),
-              h('div', { className: 'dshr-row' },
-                h('button', {
-                  type: 'button',
-                  className: 'dshr-btn',
-                  id: 'dshr-remote-clear-cache',
-                  onClick: () => void globalThis.__DSH_REMOTE_SHELL__?.clearFrontendCache?.(),
-                }, t('clearCacheBtn')),
-                h('button', {
-                  type: 'button',
-                  className: 'dshr-btn dshr-btn-danger',
-                  id: 'dshr-remote-lock-forget',
-                  onClick: () => void globalThis.__DSH_REMOTE_SHELL__?.lockAndForget?.(),
-                }, t('lockForgetBtn')),
+              h('div', { className: 'dshr-action-list', id: 'dshr-remote-actions' },
+                h('div', { className: 'dshr-action-item', id: 'dshr-remote-action-clear-cache' },
+                  h('div', { className: 'dshr-action-copy' },
+                    h('div', { className: 'dshr-action-title' }, t('clearCacheTitle')),
+                    h('div', { className: 'dshr-action-desc', id: 'dshr-remote-clear-cache-desc' }, t('clearCacheDesc')),
+                  ),
+                  h('div', { className: 'dshr-action-control' },
+                    h('button', {
+                      type: 'button',
+                      className: 'dshr-btn',
+                      id: 'dshr-remote-clear-cache',
+                      'aria-describedby': 'dshr-remote-clear-cache-desc',
+                      onClick: () => void globalThis.__DSH_REMOTE_SHELL__?.clearFrontendCache?.(),
+                    }, t('clearCacheBtn')),
+                  ),
+                ),
+                h('div', { className: 'dshr-action-item', id: 'dshr-remote-action-unbind-device' },
+                  h('div', { className: 'dshr-action-copy' },
+                    h('div', { className: 'dshr-action-title' }, t('lockForgetTitle')),
+                    h('div', { className: 'dshr-action-desc', id: 'dshr-remote-lock-forget-desc' }, t('lockForgetDesc')),
+                  ),
+                  h('div', { className: 'dshr-action-control' },
+                    h('button', {
+                      type: 'button',
+                      className: 'dshr-btn dshr-btn-danger',
+                      id: 'dshr-remote-lock-forget',
+                      'aria-describedby': 'dshr-remote-lock-forget-desc',
+                      onClick: () => void globalThis.__DSH_REMOTE_SHELL__?.lockAndForget?.(),
+                    }, t('lockForgetBtn')),
+                  ),
+                ),
               ),
             ),
           ),
