@@ -50,6 +50,7 @@
     "build:web": "node scripts/build-web-dist.mjs",
     "prepack": "node scripts/build-web-dist.mjs .dist-tweb/prepack-check",
     "pack:check": "npm pack --dry-run",
+    "pack:template": "node scripts/pack-market-template.mjs",
     "test:pack": "node scripts/pack-plugin.mjs --verify",
     "connect": "node cli.js connect",
     "setup": "node cli.js setup",
