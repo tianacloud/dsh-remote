@@ -1,7 +1,7 @@
 {
-  "name": "dsh-tiana-remote",
+  "name": "Tiana Link",
   "description": "通过 Tiana 端到端加密隧道与托管网页远程安全访问本机 DeepSeek Harness（DSH），内置侧栏管理面板、标准扫码连接、凭据续期与云端一键引导。",
-  "panel": "dsh-tiana-remote",
+  "panel": "Tiana Link",
   "renewToken": "立即续期",
   "cloudBinding": "云端应用绑定",
   "unbindApp": "解除绑定",

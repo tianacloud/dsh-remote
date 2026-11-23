@@ -14,7 +14,7 @@
       } catch (_) {}
     })();
   </script>
-  <title>dsh-tiana-remote · DeepSeek Harness 远程访问设置</title>
+  <title>Tiana Link · DeepSeek Harness 远程访问设置</title>
   <style>
     :root {
       /* Raw light/dark DSH design tokens (from DeepSeek Harness ui-theme) */
@@ -1275,7 +1275,7 @@
                 <path d="M10.9 10.9 9.4 9.6V7.5l.9-1.1M13.1 10.9l1.5-1.3V7.5L14 6.4M10.5 11.9 8.6 11.2V9.3M13.5 11.9l1.9-.7V9.3M10.4 12.9 8.6 13.6v2.1M13.6 12.9l1.8.7v2.1M10.8 13.8 9.4 15.1v2l.9 1.1M13.2 13.8l1.4 1.3v2l-.9 1.1" stroke="var(--spider)" stroke-width="1.3"/>
               </svg>
             </span>
-            <span class="dsh-nav-label">dsh-tiana-remote</span>
+            <span class="dsh-nav-label">Tiana Link</span>
             <span class="dsh-live-dot" id="sidebar-live-dot" title="远程访问在线"></span>
           </button>
 
@@ -1296,15 +1296,15 @@
             <span>工作区 · my-space</span>
             <span>3</span>
           </div>
-          <button type="button" class="dsh-ws-row" data-nav-toast="示例会话仅作工作台上下文展示，当前聚焦 dsh-tiana-remote 设置">
+          <button type="button" class="dsh-ws-row" data-nav-toast="示例会话仅作工作台上下文展示，当前聚焦 Tiana Link 设置">
             <span class="dsh-ws-title">优化远端工作台流式缓存策略</span>
             <span class="dsh-ws-time">12m</span>
           </button>
-          <button type="button" class="dsh-ws-row" data-nav-toast="示例会话仅作工作台上下文展示，当前聚焦 dsh-tiana-remote 设置">
+          <button type="button" class="dsh-ws-row" data-nav-toast="示例会话仅作工作台上下文展示，当前聚焦 Tiana Link 设置">
             <span class="dsh-ws-title">补充 WebRTC P2P 断线恢复单测</span>
             <span class="dsh-ws-time">1h</span>
           </button>
-          <button type="button" class="dsh-ws-row" data-nav-toast="示例会话仅作工作台上下文展示，当前聚焦 dsh-tiana-remote 设置">
+          <button type="button" class="dsh-ws-row" data-nav-toast="示例会话仅作工作台上下文展示，当前聚焦 Tiana Link 设置">
             <span class="dsh-ws-title">检查插件权限与发布打包清单</span>
             <span class="dsh-ws-time">昨天</span>
           </button>
@@ -1339,7 +1339,7 @@
     </aside>
 
     <!-- Main Workbench Column -->
-    <section class="dsh-center" aria-label="dsh-tiana-remote 设置主区域">
+    <section class="dsh-center" aria-label="Tiana Link 设置主区域">
       <header class="dsh-topbar">
         <div class="dsh-topbar-left">
           <span class="dsh-plugin-emblem" aria-hidden="true">
@@ -1351,7 +1351,7 @@
             </svg>
           </span>
           <div class="dsh-topbar-titles">
-            <h1 class="dsh-page-title">dsh-tiana-remote</h1>
+            <h1 class="dsh-page-title">Tiana Link</h1>
             <span class="dsh-tag-e2ee">E2EE 端到端加密</span>
             <span class="dsh-status-pill" id="topbar-status-pill">
               <span class="dsh-live-dot" id="topbar-status-dot"></span>
@@ -1576,7 +1576,7 @@
                 <div class="dsh-action-item">
                   <div class="dsh-action-copy">
                     <div class="dsh-action-title">解除此设备绑定</div>
-                    <div class="dsh-action-desc">仅清除当前设备／浏览器中保存的配对密钥并断开连接；Tiana 云端应用与本机电脑的关联仍然存在，仍可从其他设备或重新输入配对密钥登录。如需解除或更换云端应用与主机的绑定，请在本机电脑直接打开 DSH 的「dsh-tiana-remote」面板操作（受安全边界限制，主机绑定与密钥管理仅限本机访问）。</div>
+                    <div class="dsh-action-desc">仅清除当前设备／浏览器中保存的配对密钥并断开连接；Tiana 云端应用与本机电脑的关联仍然存在，仍可从其他设备或重新输入配对密钥登录。如需解除或更换云端应用与主机的绑定，请在本机电脑直接打开 DSH 的「Tiana Link」面板操作（受安全边界限制，主机绑定与密钥管理仅限本机访问）。</div>
                   </div>
                   <button type="button" class="dsh-btn dsh-btn-danger" id="btn-remote-unbind">解除此设备绑定</button>
                 </div>
@@ -1644,7 +1644,7 @@
 
   <!-- Modal 1: Scannable QR Code Dialog -->
   <dialog class="dsh-dialog" id="dialog-qr" closedby="any" aria-labelledby="dialog-qr-title">
-    <h3 class="dsh-dialog-title" id="dialog-qr-title">扫码访问 dsh-tiana-remote 工作台</h3>
+    <h3 class="dsh-dialog-title" id="dialog-qr-title">扫码访问远程工作台</h3>
     <div id="qr-container" style="display:flex;justify-content:center;padding:12px 0;"></div>
     <p class="dsh-dialog-body" style="margin-bottom:0;">
       使用手机或平板相机扫描此标准二维码打开托管地址（二维码不含配对密钥，打开后粘贴密钥即可端到端加密解锁）。
@@ -1668,7 +1668,7 @@
 
   <!-- Modal 3: Connection Topology & Security Boundary -->
   <dialog class="dsh-dialog" id="dialog-topo" closedby="any" aria-labelledby="dialog-topo-title">
-    <h3 class="dsh-dialog-title" id="dialog-topo-title">dsh-tiana-remote 连接拓扑与安全边界</h3>
+    <h3 class="dsh-dialog-title" id="dialog-topo-title">Tiana Link 连接拓扑与安全边界</h3>
     <div class="dsh-topo" style="margin-bottom:12px;">
       <div class="dsh-topo-node">
         <span class="dsh-topo-title">远端浏览器</span>
@@ -2078,8 +2078,8 @@
       for (const el of document.querySelectorAll('[data-nav-toast]')) {
         el.addEventListener('click', () => showToast(el.dataset.navToast));
       }
-      $('btn-new-session').addEventListener('click', () => showToast('当前预览聚焦 dsh-tiana-remote 设置面板'));
-      $('btn-sidebar-info').addEventListener('click', () => showToast('DeepSeek Harness 左侧栏 · 当前选中 dsh-tiana-remote'));
+      $('btn-new-session').addEventListener('click', () => showToast('当前预览聚焦 Tiana Link 设置面板'));
+      $('btn-sidebar-info').addEventListener('click', () => showToast('DeepSeek Harness 左侧栏 · 当前选中 Tiana Link'));
       $('nav-dsh-tiana-remote').addEventListener('click', () => switchView('local'));
 
       updateThemeButton();

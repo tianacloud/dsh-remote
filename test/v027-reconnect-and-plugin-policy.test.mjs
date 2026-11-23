@@ -714,7 +714,7 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.equal(unbindBtnZh.props['aria-describedby'], 'dshr-remote-lock-forget-desc');
   assert.match(collectText(unbindDescZh), /当前设备.*浏览器/u);
   assert.match(collectText(unbindDescZh), /关联仍然存在/u);
-  assert.match(collectText(unbindDescZh), /本机电脑.*dsh-tiana-remote/u);
+  assert.match(collectText(unbindDescZh), /本机电脑.*Tiana Link/u);
 
   clearBtnZh.props.onClick();
   unbindBtnZh.props.onClick();
@@ -741,7 +741,7 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.equal(collectText(unbindBtnEn), 'Unbind This Device');
   assert.match(collectText(unbindDescEn), /this device\/browser only/i);
   assert.match(collectText(unbindDescEn), /remains active/i);
-  assert.match(collectText(unbindDescEn), /dsh-tiana-remote.*host computer/i);
+  assert.match(collectText(unbindDescEn), /Tiana Link.*host computer/i);
 
   // 2. Local mode (zh-CN): renders bridgeConflict banner, renders NO plugin policy card,
   //    renders structured sync/repair cloud page action row + cloud binding unbind section,
@@ -925,8 +925,21 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.ok(collectText(lTreeUnboundEn).includes('cloud policy cleanup was skipped'));
   assert.equal(collectText(findById(lTreeUnboundEn, 'dshr-last-bound-rebind-btn')), 'Rebind Now');
 
-  // 3. Static copy hygiene guard across client.js
+  // 3. Static copy hygiene guard across client.js, locale/*.json, and web-src/shell-ui.js
   assert.ok(!clientCode.includes('重推静态壳层修复'), 'client.js must not retain old Chinese repair button copy');
   assert.ok(!clientCode.includes('静态壳层'), 'client.js must not retain static shell user-facing copy');
   assert.ok(!clientCode.includes('Repair / Republish Static Shell'), 'client.js must not retain old English repair button copy');
+  assert.ok(collectText(lTree).includes('Tiana Link'), 'local zh view must display Tiana Link title');
+  assert.ok(collectText(lTreeEn).includes('Tiana Link'), 'local en view must display Tiana Link title');
+  assert.ok(collectText(rTree).includes('Tiana Link'), 'remote zh view must display Tiana Link title');
+  assert.ok(collectText(rTreeEn).includes('Tiana Link'), 'remote en view must display Tiana Link title');
+  const zhLocale = JSON.parse(readFileSync(new URL('../locale/zh-CN.json', import.meta.url), 'utf8'));
+  const enLocale = JSON.parse(readFileSync(new URL('../locale/en-US.json', import.meta.url), 'utf8'));
+  assert.equal(zhLocale.name, 'Tiana Link');
+  assert.equal(zhLocale.panel, 'Tiana Link');
+  assert.equal(enLocale.name, 'Tiana Link');
+  assert.equal(enLocale.panel, 'Tiana Link');
+  const shellUiCode = readFileSync(new URL('../web-src/shell-ui.js', import.meta.url), 'utf8');
+  assert.ok(shellUiCode.includes('打开「Tiana Link」开启远程访问开关'), 'shell-ui offline step must reference Tiana Link sidebar');
+  assert.ok(shellUiCode.includes('本地 DSH 侧栏「Tiana Link」复制'), 'shell-ui unlock hint must reference Tiana Link sidebar');
 });

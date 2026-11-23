@@ -399,8 +399,8 @@
     const PANEL_ID = 'tiana-remote';
 
     const zh = {
-      panel: 'dsh-tiana-remote',
-      title: 'dsh-tiana-remote',
+      panel: 'Tiana Link',
+      title: 'Tiana Link',
       subtitleLocal: '零公网 IP 端到端加密远程访问管理',
       subtitleRemote: '当前正在通过端到端加密隧道访问远程主机',
       statusOnline: '在线运行中',
@@ -416,7 +416,7 @@
       adminAccessDeniedTitle: '主机管理接口访问受限',
       adminErrorHint: '请确认当前浏览器通过本机或受信任的局域网／Tailnet 地址访问 DSH（且已配置 --trusted-host 并具备有效的本机所有者会话）。',
       retry: '重试',
-      loadingOverview: '正在加载 dsh-tiana-remote 状态…',
+      loadingOverview: '正在加载 Tiana Link 状态…',
       toggleLabel: '启用远程访问',
       remoteUrl: '托管访问地址',
       copy: '复制',
@@ -481,7 +481,7 @@
       clearCacheDesc: '当本机升级了 DSH 或某个插件后，如果远端界面仍显示旧版本或出现异常，可点击此项清除当前浏览器缓存的前端资源并重新加载最新页面（不影响本机数据，也不会清除已保存的配对密钥）。',
       lockForgetTitle: '解除此设备绑定',
       lockForgetBtn: '解除此设备绑定',
-      lockForgetDesc: '仅清除当前设备／浏览器中保存的配对密钥并断开连接；Tiana 云端应用与本机电脑的关联仍然存在，仍可从其他设备或重新输入配对密钥登录。如需解除或更换云端应用与主机的绑定，请在本机电脑直接打开 DSH 的「dsh-tiana-remote」面板操作（受安全边界限制，主机绑定与密钥管理仅限本机访问）。',
+      lockForgetDesc: '仅清除当前设备／浏览器中保存的配对密钥并断开连接；Tiana 云端应用与本机电脑的关联仍然存在，仍可从其他设备或重新输入配对密钥登录。如需解除或更换云端应用与主机的绑定，请在本机电脑直接打开 DSH 的「Tiana Link」面板操作（受安全边界限制，主机绑定与密钥管理仅限本机访问）。',
       onboardTitle: '绑定或新建云端 dsh-tiana-remote 应用',
       onboardBindTab: '绑定已有 Tiana 应用',
       onboardCreateTab: '在当前空间新建 dsh-tiana-remote 应用',
@@ -506,8 +506,8 @@
     };
 
     const en = {
-      panel: 'dsh-tiana-remote',
-      title: 'dsh-tiana-remote',
+      panel: 'Tiana Link',
+      title: 'Tiana Link',
       subtitleLocal: 'End-to-end encrypted remote access for this DSH host',
       subtitleRemote: 'Connected to your local DSH host via E2EE tunnel',
       statusOnline: 'Online',
@@ -523,7 +523,7 @@
       adminAccessDeniedTitle: 'Host admin API access denied',
       adminErrorHint: 'Verify you are accessing DSH over loopback or a private LAN/Tailnet address configured via --trusted-host with an active owner session.',
       retry: 'Retry',
-      loadingOverview: 'Loading dsh-tiana-remote status…',
+      loadingOverview: 'Loading Tiana Link status…',
       toggleLabel: 'Enable Remote Access',
       remoteUrl: 'Hosted Remote URL',
       copy: 'Copy',
@@ -588,7 +588,7 @@
       clearCacheDesc: 'If the remote interface still shows an older version or behaves unexpectedly after upgrading DSH or a plugin on your host, clear this browser’s cached frontend assets and reload the latest UI. Your local host data and saved pairing key will not be affected.',
       lockForgetTitle: 'Unbind This Device',
       lockForgetBtn: 'Unbind This Device',
-      lockForgetDesc: 'Clears the saved pairing key on this device/browser only and disconnects. The link between your Tiana cloud app and host computer remains active, so you can still sign in from other devices or re-enter the pairing key. To unbind or switch the cloud app on your host, open the "dsh-tiana-remote" panel directly on your host computer (host binding and key management are restricted to local access for security isolation).',
+      lockForgetDesc: 'Clears the saved pairing key on this device/browser only and disconnects. The link between your Tiana cloud app and host computer remains active, so you can still sign in from other devices or re-enter the pairing key. To unbind or switch the cloud app on your host, open the "Tiana Link" panel directly on your host computer (host binding and key management are restricted to local access for security isolation).',
       onboardTitle: 'Bind or Create a Tiana dsh-tiana-remote App',
       onboardBindTab: 'Bind Existing Tiana App',
       onboardCreateTab: 'Create New dsh-tiana-remote App',

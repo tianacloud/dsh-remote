@@ -54,8 +54,11 @@ test('packMarketTemplate builds a valid unified install.zip without mutating rel
     assert.equal(siteConfig.functionId, '__TIANA_FUNCTION_RELAY_8c4e2a19__');
     assert.equal(siteConfig.webId, '__TIANA_WEB_ID_5f3b9d02__');
 
-    // Showcase preview must use the updated user-facing sync/repair cloud page copy & explanation
+    // Showcase preview must use Tiana Link for DSH sidebar/title and updated sync/repair cloud page copy
     const previewHtml = outer.files['showcase/preview.html'].toString('utf8');
+    assert.ok(previewHtml.includes('<span class="dsh-nav-label">Tiana Link</span>'), 'preview.html must display Tiana Link in DSH sidebar');
+    assert.ok(previewHtml.includes('<h1 class="dsh-page-title">Tiana Link</h1>'), 'preview.html must display Tiana Link as settings page title');
+    assert.ok(previewHtml.includes('「Tiana Link」面板操作'), 'preview.html remote view must reference Tiana Link panel');
     assert.ok(previewHtml.includes('同步/修复云端访问页'), 'preview.html must display updated sync/repair cloud page button copy');
     assert.ok(previewHtml.includes('id="desc-repair-shell"'), 'preview.html must include structured explanation for sync/repair cloud page');
     assert.ok(previewHtml.includes('云端应用绑定'), 'preview.html must display local cloud app binding section');

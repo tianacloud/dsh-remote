@@ -172,7 +172,7 @@ export function createShellUI(rootEl) {
       const display = hostName || hostId || '本地主机';
       const steps = el('div', { className: 'dsh-shell-sub' },
         el('div', { textContent: '1. 在该电脑终端运行 `dsh --profile web` 启动本地服务；' }),
-        el('div', { textContent: '2. 或在已运行的本地 DSH 左侧边栏打开「dsh-tiana-remote」开启远程访问开关。' }),
+        el('div', { textContent: '2. 或在已运行的本地 DSH 左侧边栏打开「Tiana Link」开启远程访问开关。' }),
       );
       waitStatusEl = el('span', { textContent: `正在监听主机 "${display}" 上线信号，恢复后自动连接…` });
       const waitBar = el('div', { className: 'dsh-shell-wait' }, el('span', { className: 'dsh-shell-pulse' }), waitStatusEl);
@@ -219,7 +219,7 @@ export function createShellUI(rootEl) {
 
         const rememberBox = el('input', { type: 'checkbox', id: 'dsh-remote-remember-key', checked: Boolean(defaultRemember) });
         const rememberLabel = el('label', { className: 'dsh-shell-check' }, rememberBox, '在此受信任浏览器记住密钥（取消勾选后密钥仅驻留当前页面内存，刷新或关闭标签页立即销毁）');
-        const hint = el('div', { className: 'dsh-shell-sub', style: 'font-size:12px;', textContent: '密钥仅在浏览器与你的电脑之间进行端到端加密校验，Tiana 云端无法解密任何内容。可从刚运行的 connect 剪贴板粘贴，或在本地 DSH 侧栏「dsh-tiana-remote」复制。' });
+        const hint = el('div', { className: 'dsh-shell-sub', style: 'font-size:12px;', textContent: '密钥仅在浏览器与你的电脑之间进行端到端加密校验，Tiana 云端无法解密任何内容。可从刚运行的 connect 剪贴板粘贴，或在本地 DSH 侧栏「Tiana Link」复制。' });
         const submitBtn = el('button', { id: 'dsh-remote-e2ee-submit', type: 'submit', className: 'dsh-shell-btn dsh-shell-btn-primary', textContent: '解锁并进入工作台' });
         const keyHint = el('p', { className: 'dsh-shell-sub', textContent: '忘记或需要查看当前配对密钥？在本地主机终端运行：' });
         const keyBox = el('div', { className: 'dsh-shell-codebox' },
