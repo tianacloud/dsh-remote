@@ -15,6 +15,80 @@ import {
 export const STATE_CONFIG_VERSION = 2;
 export const DEFAULT_STUN_URLS = ['stun:stun.cloudflare.com:3478'];
 
+/**
+ * Authoritative predicate for whether a remote state object represents a bound,
+ * configured host (as opposed to null or an unbound state that only retains local
+ * preferences and `lastBound`).
+ */
+export function isRemoteConfigured(state) {
+  return Boolean(state?.function?.url && state?.web?.id && state?.host?.hostId);
+}
+
+function normalizeLastBound(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const webId = typeof raw.webId === 'string' ? raw.webId.trim() : '';
+  if (!webId) return null;
+  return {
+    webId,
+    webName: typeof raw.webName === 'string' && raw.webName.trim() ? raw.webName.trim() : webId,
+    endpoint: typeof raw.endpoint === 'string' ? raw.endpoint.trim() : '',
+    unboundAt: typeof raw.unboundAt === 'string' && raw.unboundAt.trim() ? raw.unboundAt.trim() : '',
+  };
+}
+
+/**
+ * Construct a clean unbound state that strips all binding & credential fields
+ * (`owner`, `web`, `function`, `e2ee`, `host.registrationKey`, `pendingBind`, `pendingSetup`),
+ * disables remote access (`enabled: false`), preserves lightweight local preferences
+ * (`host.hostId`, `host.hostName`, `network`), and records non-sensitive `lastBound`
+ * metadata when `prevState.web.id` (or prior `lastBound`) exists.
+ */
+export function buildUnboundState(prevState) {
+  const prev = prevState && typeof prevState === 'object' && !Array.isArray(prevState) ? prevState : {};
+  const stunUrls = Array.isArray(prev.network?.stunUrls)
+    ? prev.network.stunUrls.map((u) => String(u).trim()).filter(Boolean)
+    : [...DEFAULT_STUN_URLS];
+  const p2pEnabled = prev.network?.p2pEnabled !== undefined ? Boolean(prev.network.p2pEnabled) : true;
+  const now = new Date().toISOString();
+
+  let host;
+  if (prev.host?.hostId) {
+    host = {
+      hostId: String(prev.host.hostId),
+      hostName: String(prev.host.hostName || prev.host.hostId),
+    };
+  } else if (prev.host?.hostName) {
+    host = {
+      hostName: String(prev.host.hostName),
+    };
+  }
+
+  let lastBound = null;
+  if (prev.web?.id) {
+    lastBound = {
+      webId: String(prev.web.id),
+      webName: String(prev.web.name || prev.web.id),
+      endpoint: String(prev.web.endpoint || ''),
+      unboundAt: now,
+    };
+  } else {
+    lastBound = normalizeLastBound(prev.lastBound);
+  }
+
+  return {
+    version: STATE_CONFIG_VERSION,
+    configVersion: STATE_CONFIG_VERSION,
+    enabled: false,
+    updatedAt: now,
+    ...(host ? { host } : {}),
+    network: {
+      p2pEnabled,
+      stunUrls,
+    },
+    ...(lastBound ? { lastBound } : {}),
+  };
+}
+
 const DEPRECATED_PLUGIN_STATE_KEYS = new Set([
   'pluginPolicy',
   'pluginAccessMode',
@@ -200,6 +274,12 @@ export function migrateRemoteState(raw) {
     } catch {
       // Leave malformed legacy seed intact in e2eeKeySeed for caller to handle.
     }
+  }
+  const normalizedLastBound = normalizeLastBound(raw.lastBound);
+  if (normalizedLastBound) {
+    next.lastBound = normalizedLastBound;
+  } else {
+    delete next.lastBound;
   }
   return next;
 }

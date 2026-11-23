@@ -3,7 +3,14 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { loadNormalizedRemoteState, loadRemoteState, migrateRemoteState, saveRemoteState } from '../src/state.js';
+import {
+  buildUnboundState,
+  isRemoteConfigured,
+  loadNormalizedRemoteState,
+  loadRemoteState,
+  migrateRemoteState,
+  saveRemoteState,
+} from '../src/state.js';
 
 test('state supports private atomic rewrites and rejects unsafe file access', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-state-test-'));
@@ -86,6 +93,62 @@ test('legacy state.json with deprecated plugin-filter fields loads cleanly, pres
     // Non-deprecated custom fields under security (if ever present) are still preserved
     const customSec = migrateRemoteState({ version: 2, security: { customFlag: true, allowedWebPlugins: ['x'] } });
     assert.deepEqual(customSec.security, { customFlag: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('isRemoteConfigured and buildUnboundState strip all binding/secrets, preserve preferences, and retain non-sensitive lastBound', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-remote-unbound-state-'));
+  const file = join(dir, 'state.json');
+  try {
+    const bound = {
+      version: 2,
+      configVersion: 2,
+      enabled: true,
+      owner: { userId: 'u-1', tenantId: 't-1', email: 'owner@example.test', spaceName: 'My Space' },
+      host: { hostId: 'my-mac', hostName: 'My MacBook', registrationKey: 'R'.repeat(43) },
+      e2ee: { algorithm: 'ECDH-P256+HKDF-SHA256+AES-256-GCM', secret: 'S'.repeat(43), fingerprint: 'aa:bb:cc' },
+      function: { id: 'fn-1', name: 'dsh-remote-relay', url: 'https://relay.example.test', token: 'tok-1', expiresAt: 1900000000 },
+      web: { id: 'web123456789', name: 'DSH Remote', endpoint: 'https://web123456789.example.test/web/web123456789/' },
+      network: { p2pEnabled: false, stunUrls: ['stun:stun.example.test:3478'] },
+      pendingBind: { webId: 'web123456789', registrationKey: 'P'.repeat(43) },
+      pendingSetup: { webId: 'web123456789', registrationKey: 'Q'.repeat(43) },
+    };
+    assert.equal(isRemoteConfigured(null), false);
+    assert.equal(isRemoteConfigured({}), false);
+    assert.equal(isRemoteConfigured(bound), true);
+
+    const unbound = buildUnboundState(bound);
+    assert.equal(isRemoteConfigured(unbound), false);
+    assert.equal(unbound.version, 2);
+    assert.equal(unbound.enabled, false);
+    assert.deepEqual(unbound.host, { hostId: 'my-mac', hostName: 'My MacBook' });
+    assert.equal('registrationKey' in unbound.host, false);
+    assert.deepEqual(unbound.network, { p2pEnabled: false, stunUrls: ['stun:stun.example.test:3478'] });
+    assert.equal('owner' in unbound, false);
+    assert.equal('web' in unbound, false);
+    assert.equal('function' in unbound, false);
+    assert.equal('e2ee' in unbound, false);
+    assert.equal('pendingBind' in unbound, false);
+    assert.equal('pendingSetup' in unbound, false);
+    assert.equal(unbound.lastBound.webId, 'web123456789');
+    assert.equal(unbound.lastBound.webName, 'DSH Remote');
+    assert.equal(unbound.lastBound.endpoint, 'https://web123456789.example.test/web/web123456789/');
+    assert.ok(typeof unbound.lastBound.unboundAt === 'string' && unbound.lastBound.unboundAt.length > 0);
+
+    saveRemoteState(unbound, file);
+    const loaded = loadNormalizedRemoteState(file);
+    assert.equal(isRemoteConfigured(loaded), false);
+    assert.equal(loaded.enabled, false);
+    assert.deepEqual(loaded.host, { hostId: 'my-mac', hostName: 'My MacBook' });
+    assert.deepEqual(loaded.network, { p2pEnabled: false, stunUrls: ['stun:stun.example.test:3478'] });
+    assert.deepEqual(loaded.lastBound, unbound.lastBound);
+
+    // Calling buildUnboundState again preserves lastBound idempotently
+    const unboundAgain = buildUnboundState(loaded);
+    assert.deepEqual(unboundAgain.lastBound, unbound.lastBound);
+    assert.equal(isRemoteConfigured(unboundAgain), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

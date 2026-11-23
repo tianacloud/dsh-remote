@@ -744,19 +744,44 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.match(collectText(unbindDescEn), /dsh-tiana-remote.*host computer/i);
 
   // 2. Local mode (zh-CN): renders bridgeConflict banner, renders NO plugin policy card,
-  //    renders structured sync/repair cloud page action row with clear description, and invokes /admin/repair
+  //    renders structured sync/repair cloud page action row + cloud binding unbind section,
+  //    and transitions cleanly to unbound view with lastBound quick rebind bar
   let repairResolve = null;
   let repairCalls = 0;
+  let isUnbound = false;
+  let unbindRequests = [];
+  let provisionRequests = [];
   const localOverviewPayload = {
     ok: true,
     configured: true,
     enabled: true,
+    owner: { email: 'owner@example.test', spaceName: 'Demo Space' },
     host: { hostId: 'host-demo', hostName: 'HostDemo' },
-    web: { id: 'web123456789', endpoint: 'https://web123456789.example.test/web/web123456789/' },
+    web: { id: 'web123456789', name: 'dsh-tiana-remote', endpoint: 'https://web123456789.example.test/web/web123456789/' },
     e2ee: { fingerprint: '11:22' },
     bridge: { relayConnected: false, hostConflict: true, sessions: [] },
     bridgeConflict: { ownerPid: 2495419, ownerOrigin: 'https://workstation.example.test:3080' },
     network: { p2pEnabled: true, stunUrls: [] },
+    lastBound: null,
+  };
+  const unboundOverviewPayload = {
+    ok: true,
+    configured: false,
+    enabled: false,
+    owner: null,
+    host: { hostId: 'host-demo', hostName: 'HostDemo' },
+    web: null,
+    function: null,
+    e2ee: null,
+    bridge: { relayConnected: false, hostConflict: false, sessions: [] },
+    bridgeConflict: null,
+    network: { p2pEnabled: true, stunUrls: [] },
+    lastBound: {
+      webId: 'web123456789',
+      webName: 'dsh-tiana-remote',
+      endpoint: 'https://web123456789.example.test/web/web123456789/',
+      unboundAt: '2026-11-23T01:00:00.000Z',
+    },
   };
   const localMount = mountPanel('local', async (url, opts) => {
     if (url === '/api/tiana-remote/admin/repair' && opts?.method === 'POST') {
@@ -765,7 +790,25 @@ test('client.js omits plugin access policy UI in both remote and local views whi
         repairResolve = () => resolve(new Response(JSON.stringify({ ok: true, repaired: true }), { status: 200 }));
       });
     }
-    return new Response(JSON.stringify(localOverviewPayload), { status: 200 });
+    if (url === '/api/tiana-remote/admin/unbind' && opts?.method === 'POST') {
+      unbindRequests.push(JSON.parse(opts.body));
+      isUnbound = true;
+      return new Response(JSON.stringify({
+        ok: true,
+        unbound: true,
+        cloudPolicyCleared: true,
+        cloudPolicyWarning: '',
+        lastBound: unboundOverviewPayload.lastBound,
+      }), { status: 200 });
+    }
+    if (url === '/api/tiana-remote/admin/provision' && opts?.method === 'POST') {
+      provisionRequests.push(JSON.parse(opts.body));
+      return new Response(JSON.stringify({ ok: true, started: true, step: 'binding' }), { status: 202 });
+    }
+    if (url === '/api/tiana-remote/admin/provision-status') {
+      return new Response(JSON.stringify({ ok: true, running: false, step: 'done', logs: [] }), { status: 200 });
+    }
+    return new Response(JSON.stringify(isUnbound ? unboundOverviewPayload : localOverviewPayload), { status: 200 });
   }, { language: 'zh-CN' });
 
   localMount.render();
@@ -775,6 +818,7 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.ok(conflictBanner, 'local view must render bridgeConflict alert banner');
   assert.ok(collectText(conflictBanner).includes('2495419'));
   assert.equal(findById(lTree, 'dshr-plugin-access-card'), null, 'local view must NOT render plugin access card');
+  assert.equal(findById(lTree, 'dshr-rebind-form'), null, 'local view must NOT render legacy inline rebind form');
 
   const repairActionZh = findById(lTree, 'dshr-local-action-repair');
   const repairBtnZh = findById(lTree, 'dshr-repair-btn');
@@ -785,6 +829,18 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.match(collectText(repairDescZh), /升级本机插件后.*云端访问页/u);
   assert.match(collectText(repairDescZh), /不影响已有配对密钥和本机数据/u);
   assert.ok(!collectText(lTree).includes('重推静态壳层'), 'local zh view must not contain legacy static shell copy');
+
+  const bindingMetaZh = findById(lTree, 'dshr-cloud-binding-meta');
+  const unbindBtnLocalZh = findById(lTree, 'dshr-unbind-btn');
+  const unbindDescLocalZh = findById(lTree, 'dshr-unbind-desc');
+  const unbindDialogZh = findById(lTree, 'dshr-unbind-dialog');
+  assert.ok(bindingMetaZh && unbindBtnLocalZh && unbindDescLocalZh && unbindDialogZh, 'local zh view must render cloud binding & unbind dialog');
+  assert.ok(collectText(bindingMetaZh).includes('web123456789'));
+  assert.ok(collectText(bindingMetaZh).includes('owner@example.test'));
+  assert.ok(collectText(bindingMetaZh).includes('Demo Space'));
+  assert.equal(collectText(unbindBtnLocalZh), '解除绑定');
+  assert.equal(unbindBtnLocalZh.props['aria-describedby'], 'dshr-unbind-desc');
+  assert.equal(findById(unbindDialogZh, 'dshr-unbind-cancel').props.autoFocus, true);
 
   // Verify busy & completed states when invoking handleRepair()
   repairBtnZh.props.onClick();
@@ -799,15 +855,44 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.equal(collectText(findById(lTreeDoneZh, 'dshr-repair-btn')), '同步/修复云端访问页');
   assert.ok(collectText(lTreeDoneZh).includes('云端访问页已同步'), 'local zh toast must announce cloud page synced');
 
-  // 2b. Local mode (en-US): verifies English sync/repair button, description, busy state, and toast
+  // Confirm unbind dialog -> POST /api/tiana-remote/admin/unbind { confirm: true } -> transitions to unbound card + lastBound bar
+  unbindDialogZh.props.onClose({ currentTarget: { returnValue: 'confirm' } });
+  await new Promise((r) => setTimeout(r, 25));
+  const lTreeUnboundZh = localMount.render();
+  assert.deepEqual(unbindRequests, [{ confirm: true }]);
+  assert.ok(collectText(findById(lTreeUnboundZh, 'dshr-local-status-badge')).includes('尚未绑定'));
+  assert.equal(findById(lTreeUnboundZh, 'dshr-enable-toggle'), null, 'unbound view must hide enable toggle');
+  assert.ok(findById(lTreeUnboundZh, 'dshr-unconfigured-card'), 'unbound view must render onboarding card');
+  assert.equal(findById(lTreeUnboundZh, 'dshr-bind-hostname').props.value, 'HostDemo');
+  const lastBoundBarZh = findById(lTreeUnboundZh, 'dshr-last-bound-bar');
+  const lastBoundRebindBtnZh = findById(lTreeUnboundZh, 'dshr-last-bound-rebind-btn');
+  assert.ok(lastBoundBarZh && lastBoundRebindBtnZh, 'unbound view must render lastBound quick rebind bar');
+  assert.ok(collectText(lastBoundBarZh).includes('web123456789'));
+  assert.equal(collectText(lastBoundRebindBtnZh), '填入并重绑');
+  lastBoundRebindBtnZh.props.onClick();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(provisionRequests, [{ mode: 'bind', webId: 'web123456789', hostName: 'HostDemo', rebind: false }]);
+
+  // 2b. Local mode (en-US): verifies English sync/repair, unbind, and unbound Not Bound + lastBound bar
   let repairEnResolve = null;
+  let isUnboundEn = false;
   const localEnMount = mountPanel('local', async (url, opts) => {
     if (url === '/api/tiana-remote/admin/repair' && opts?.method === 'POST') {
       return new Promise((resolve) => {
         repairEnResolve = () => resolve(new Response(JSON.stringify({ ok: true, repaired: true }), { status: 200 }));
       });
     }
-    return new Response(JSON.stringify(localOverviewPayload), { status: 200 });
+    if (url === '/api/tiana-remote/admin/unbind' && opts?.method === 'POST') {
+      isUnboundEn = true;
+      return new Response(JSON.stringify({
+        ok: true,
+        unbound: true,
+        cloudPolicyCleared: false,
+        cloudPolicyWarning: 'offline',
+        lastBound: unboundOverviewPayload.lastBound,
+      }), { status: 200 });
+    }
+    return new Response(JSON.stringify(isUnboundEn ? unboundOverviewPayload : localOverviewPayload), { status: 200 });
   }, { language: 'en-US' });
 
   localEnMount.render();
@@ -821,6 +906,7 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.match(collectText(repairDescEn), /upgrading this plugin/i);
   assert.match(collectText(repairDescEn), /without changing your pairing key or local data/i);
   assert.ok(!collectText(lTreeEn).includes('Static Shell'), 'local en view must not contain legacy Static Shell copy');
+  assert.equal(collectText(findById(lTreeEn, 'dshr-unbind-btn')), 'Unbind Cloud App');
 
   repairBtnEn.props.onClick();
   const lTreeBusyEn = localEnMount.render();
@@ -830,6 +916,14 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   const lTreeDoneEn = localEnMount.render();
   assert.equal(collectText(findById(lTreeDoneEn, 'dshr-repair-btn')), 'Sync / Repair Cloud Page');
   assert.ok(collectText(lTreeDoneEn).includes('Cloud page synced'), 'local en toast must announce cloud page synced');
+
+  // Unbind with cloudPolicyWarning in EN shows mild warning toast and Not Bound badge
+  findById(lTreeDoneEn, 'dshr-unbind-dialog').props.onClose({ currentTarget: { returnValue: 'confirm' } });
+  await new Promise((r) => setTimeout(r, 25));
+  const lTreeUnboundEn = localEnMount.render();
+  assert.ok(collectText(findById(lTreeUnboundEn, 'dshr-local-status-badge')).includes('Not Bound'));
+  assert.ok(collectText(lTreeUnboundEn).includes('cloud policy cleanup was skipped'));
+  assert.equal(collectText(findById(lTreeUnboundEn, 'dshr-last-bound-rebind-btn')), 'Rebind Now');
 
   // 3. Static copy hygiene guard across client.js
   assert.ok(!clientCode.includes('重推静态壳层修复'), 'client.js must not retain old Chinese repair button copy');

@@ -4,11 +4,13 @@ import { dirname } from 'node:path';
 import { HostBridge } from './src/host-bridge.js';
 import { registerRemoteRoutes, registerWebServerRoutes } from './src/remote-api.js';
 import {
+  buildUnboundState,
   claimBridgeOwnership,
   defaultRuntimePath,
   defaultStatePath,
   DEFAULT_STUN_URLS,
   ensureE2eeConfig,
+  isRemoteConfigured,
   loadNormalizedRemoteState,
   loadRemoteState,
   releaseBridgeOwnership,
@@ -20,6 +22,7 @@ import {
 import {
   bindTianaRemoteWeb,
   buildRemotePolicy,
+  clearRemotePolicyIfOwned,
   ensureHostToken,
   getTianaStatus,
   provisionTianaRemote,
@@ -165,7 +168,7 @@ export function createHostController(options = {}) {
       return;
     }
     const raw = loadRemoteState(statePath);
-    if (!raw?.function?.url || !raw?.function?.token || !raw?.e2ee?.secret || !raw?.host?.hostId) {
+    if (!isRemoteConfigured(raw) || !raw?.function?.token || !raw?.e2ee?.secret) {
       stopBridge();
       return;
     }
@@ -252,7 +255,7 @@ export function createHostController(options = {}) {
   async function checkAndAutoRenewToken() {
     if (disposed) return;
     const state = loadNormalizedRemoteState(statePath);
-    if (!state?.function?.id || !state?.function?.expiresAt) return;
+    if (!isRemoteConfigured(state) || !state?.function?.id || !state?.function?.expiresAt) return;
     const now = Math.floor(Date.now() / 1000);
     if (state.function.expiresAt - now > TOKEN_RENEW_LEAD_SECONDS) return;
     try {
@@ -297,7 +300,7 @@ export function createHostController(options = {}) {
       } catch { /* non-fatal */ }
       if (process.env.DSH_REMOTE_DISABLE !== '1') {
         const existing = loadRemoteState(statePath);
-        if (!existing?.function?.url && process.env.DSH_REMOTE_AUTO_SETUP === '1') {
+        if (!isRemoteConfigured(existing) && process.env.DSH_REMOTE_AUTO_SETUP === '1') {
           log('[dsh-remote] Auto-provisioning Tiana remote resources...');
           await provisionTianaRemote({ statePath, log });
         }
@@ -323,15 +326,15 @@ export function createHostController(options = {}) {
     async getPublicStatus() {
       const state = loadNormalizedRemoteState(statePath);
       const snap = bridge?.getStatusSnapshot();
-      const configured = Boolean(state?.function?.url && state?.web?.id && state?.host?.hostId);
+      const configured = isRemoteConfigured(state);
       return {
         configured,
         enabled: configured && state.enabled !== false && process.env.DSH_REMOTE_DISABLE !== '1',
         hostName: state?.host?.hostName || null,
         hostId: state?.host?.hostId || null,
-        webId: state?.web?.id || null,
-        webEndpoint: state?.web?.endpoint || null,
-        e2eeFingerprint: state?.e2ee?.fingerprint || null,
+        webId: configured ? (state?.web?.id || null) : null,
+        webEndpoint: configured ? (state?.web?.endpoint || null) : null,
+        e2eeFingerprint: configured ? (state?.e2ee?.fingerprint || null) : null,
         p2pEnabled: snap?.p2pEnabled ?? (state?.network?.p2pEnabled !== false),
       };
     },
@@ -365,7 +368,7 @@ export function createHostController(options = {}) {
       } catch {
         // leave loggedIn: false
       }
-      const configured = Boolean(state?.function?.url && state?.web?.id && state?.host?.hostId);
+      const configured = isRemoteConfigured(state);
       return {
         ok: true,
         configured,
@@ -374,7 +377,7 @@ export function createHostController(options = {}) {
         bridge: snap,
         bridgeConflict,
         tiana,
-        owner: state?.owner ? {
+        owner: configured && state?.owner ? {
           userId: state.owner.userId,
           tenantId: state.owner.tenantId,
           email: state.owner.email,
@@ -385,24 +388,25 @@ export function createHostController(options = {}) {
           hostId: state.host.hostId,
           hostName: state.host.hostName,
         } : null,
-        web: state?.web ? {
+        web: configured && state?.web ? {
           id: state.web.id,
           name: state.web.name,
           endpoint: state.web.endpoint,
         } : null,
-        function: state?.function ? {
+        function: configured && state?.function ? {
           id: state.function.id,
           name: state.function.name,
           url: state.function.url,
           expiresAt: state.function.expiresAt,
           autoRenew: true,
         } : null,
-        e2ee: state?.e2ee?.secret ? {
+        e2ee: configured && state?.e2ee?.secret ? {
           algorithm: state.e2ee.algorithm,
           fingerprint: state.e2ee.fingerprint,
           createdAt: state.e2ee.createdAt,
         } : null,
         network: state?.network || { p2pEnabled: true, stunUrls: [...DEFAULT_STUN_URLS] },
+        lastBound: state?.lastBound || null,
       };
     },
 
@@ -412,7 +416,7 @@ export function createHostController(options = {}) {
       }
       const updated = await withStateLock(() => {
         const state = loadNormalizedRemoteState(statePath);
-        if (!state) throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
+        if (!isRemoteConfigured(state)) throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
         state.enabled = Boolean(enabled);
         state.updatedAt = new Date().toISOString();
         saveRemoteState(state, statePath);
@@ -428,7 +432,7 @@ export function createHostController(options = {}) {
 
     async revealPairingKey() {
       const state = loadNormalizedRemoteState(statePath);
-      if (!state?.e2ee?.secret) {
+      if (!isRemoteConfigured(state) || !state?.e2ee?.secret) {
         throw Object.assign(new Error('Pairing key is not initialized'), { status: 404 });
       }
       return {
@@ -440,7 +444,7 @@ export function createHostController(options = {}) {
     async rotatePairingKey() {
       const rotated = await withStateLock(() => {
         const state = loadNormalizedRemoteState(statePath);
-        if (!state) throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
+        if (!isRemoteConfigured(state)) throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
         const { e2ee } = ensureE2eeConfig(state, { rotate: true });
         state.e2ee = e2ee;
         state.updatedAt = new Date().toISOString();
@@ -475,7 +479,7 @@ export function createHostController(options = {}) {
       let hostNameChanged = false;
       const saved = await withStateLock(() => {
         const state = loadNormalizedRemoteState(statePath);
-        if (!state) throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
+        if (!isRemoteConfigured(state)) throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
         if (patch.hostName !== undefined && patch.hostName !== state.host?.hostName) {
           state.host = { ...state.host, hostName: patch.hostName };
           hostNameChanged = true;
@@ -525,7 +529,7 @@ export function createHostController(options = {}) {
 
     async repairStaticShell() {
       const state = loadNormalizedRemoteState(statePath);
-      if (!state?.web?.id || !state?.function?.id) {
+      if (!isRemoteConfigured(state) || !state?.function?.id) {
         throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
       }
       const policy = buildRemotePolicy({
@@ -545,13 +549,13 @@ export function createHostController(options = {}) {
     async renewHostToken() {
       const initial = await withStateLock(() => loadNormalizedRemoteState(statePath), statePath);
       const expectedFunctionId = initial?.function?.id;
-      if (!expectedFunctionId) {
+      if (!isRemoteConfigured(initial) || !expectedFunctionId) {
         throw Object.assign(new Error('Relay Function is not configured yet'), { status: 400 });
       }
       const tokenInfo = await ensureHostToken(initial, expectedFunctionId, { rotateToken: true, log });
       const committed = await withStateLock(() => {
         const cur = loadNormalizedRemoteState(statePath);
-        if (!cur || cur.function?.id !== expectedFunctionId) {
+        if (!cur || !isRemoteConfigured(cur) || cur.function?.id !== expectedFunctionId) {
           return null;
         }
         if (cur.function.token && Number(cur.function.expiresAt) > Number(tokenInfo.expiresAt)) {
@@ -585,7 +589,7 @@ export function createHostController(options = {}) {
         throw Object.assign(new Error('Remote access is disabled by DSH_REMOTE_DISABLE=1 environment variable'), { status: 409 });
       }
       const state = loadNormalizedRemoteState(statePath);
-      if (!state?.function?.url || !state?.host?.hostId) {
+      if (!isRemoteConfigured(state)) {
         throw Object.assign(new Error('Remote access is not configured yet'), { status: 400 });
       }
       if (!state.enabled) {
@@ -597,6 +601,85 @@ export function createHostController(options = {}) {
         bridge: bridge?.getStatusSnapshot() || null,
         bridgeConflict,
         relayConnected: Boolean(bridge?.registered),
+      };
+    },
+
+    async unbind({ clearCloudPolicy = true } = {}) {
+      if (provisionTask.running) {
+        throw Object.assign(
+          new Error('A provision task is already running; wait for it to finish before unbinding'),
+          { status: 409 },
+        );
+      }
+      const prevState = loadNormalizedRemoteState(statePath);
+      if (!isRemoteConfigured(prevState)) {
+        stopBridge({ releaseOwnership: true });
+        provisionTask = {
+          running: false,
+          step: 'idle',
+          logs: [],
+          error: null,
+          errorCode: null,
+          errorDetails: null,
+          completedAt: null,
+        };
+        return {
+          unbound: true,
+          alreadyUnbound: true,
+          kickedSessions: 0,
+          cloudPolicyCleared: false,
+          cloudPolicyWarning: '',
+          lastBound: prevState?.lastBound || null,
+        };
+      }
+
+      let kickedSessions = 0;
+      if (bridge) {
+        try {
+          kickedSessions = await bridge.disconnectAllSessions({ code: 4002, reason: 'host_unbound' });
+        } catch {
+          kickedSessions = 0;
+        }
+      }
+      stopBridge({ releaseOwnership: true });
+
+      let cloudPolicyCleared = false;
+      let cloudPolicyWarning = '';
+      if (clearCloudPolicy) {
+        const clearPolicyFn = options.clearRemotePolicy || clearRemotePolicyIfOwned;
+        const clearRes = await clearPolicyFn(prevState, {
+          log,
+          ...(options.tianaBin ? { bin: options.tianaBin } : {}),
+        });
+        cloudPolicyCleared = Boolean(clearRes?.cleared);
+        cloudPolicyWarning = clearRes?.warning || '';
+      }
+
+      const unboundState = await withStateLock(() => {
+        const latest = loadNormalizedRemoteState(statePath) || prevState;
+        const next = buildUnboundState(latest);
+        saveRemoteState(next, statePath);
+        return next;
+      }, statePath);
+      stopBridge({ releaseOwnership: true });
+
+      provisionTask = {
+        running: false,
+        step: 'idle',
+        logs: [],
+        error: null,
+        errorCode: null,
+        errorDetails: null,
+        completedAt: null,
+      };
+
+      return {
+        unbound: true,
+        alreadyUnbound: false,
+        kickedSessions,
+        cloudPolicyCleared,
+        cloudPolicyWarning,
+        lastBound: unboundState.lastBound || null,
       };
     },
 

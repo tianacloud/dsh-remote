@@ -707,6 +707,32 @@ func TestRelayPolicyContractStrictnessTransientENOENTAndEpochReverify(t *testing
 	if err != nil || polUnpaired.Paired {
 		t.Fatalf("expected explicit empty config file to transition to unpaired, got pol=%+v err=%v", polUnpaired, err)
 	}
+
+	// 7. Re-pair then clear via DSH_REMOTE_POLICY = { kind: "plain", value: "" } (non-empty JSON map)
+	time.Sleep(15 * time.Millisecond)
+	writePolicyFile(t, cfgPath, validAccess)
+	polRepaired, _, err := hub.syncPolicy()
+	if err != nil || !polRepaired.Paired {
+		t.Fatalf("expected re-paired policy before blank-value unbind test, got pol=%+v err=%v", polRepaired, err)
+	}
+	time.Sleep(15 * time.Millisecond)
+	blankPolicyPayload, _ := json.Marshal(map[string]any{
+		"DSH_REMOTE_POLICY": map[string]string{
+			"kind":  "plain",
+			"value": "",
+		},
+		"CUSTOM_USER_VAR": map[string]string{
+			"kind":  "plain",
+			"value": "keep-me",
+		},
+	})
+	if err := os.WriteFile(cfgPath, blankPolicyPayload, 0o600); err != nil {
+		t.Fatalf("write blank DSH_REMOTE_POLICY: %v", err)
+	}
+	polCleared, _, err := hub.syncPolicy()
+	if err != nil || polCleared.Paired {
+		t.Fatalf("expected blank DSH_REMOTE_POLICY value to transition cleanly to unpaired, got pol=%+v err=%v", polCleared, err)
+	}
 }
 
 func TestRelayHostOnlineWebIDIsolationAndSupersededEpochSuppression(t *testing.T) {

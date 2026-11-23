@@ -1512,10 +1512,10 @@
                   </div>
                   <div class="dsh-action-item">
                     <div class="dsh-action-copy">
-                      <div class="dsh-action-title">解除此设备绑定</div>
-                      <div class="dsh-action-desc">仅清除当前浏览器保存的配对密钥并断开；更换云端应用绑定请在本机面板操作。</div>
+                      <div class="dsh-action-title">云端应用绑定（wdemo8x2k9p1 · my-space）</div>
+                      <div class="dsh-action-desc" id="desc-local-unbind">解除后停止远端隧道并退出至未绑定状态，不会删除云端应用，随时可重绑或新建。</div>
                     </div>
-                    <button type="button" class="dsh-btn dsh-btn-danger dsh-btn-sm" id="btn-local-unbind">解除此设备绑定</button>
+                    <button type="button" class="dsh-btn dsh-btn-danger dsh-btn-sm" id="btn-local-unbind" aria-describedby="desc-local-unbind">解除绑定</button>
                   </div>
                 </div>
               </div>
@@ -2043,11 +2043,12 @@
       $('btn-local-clear-cache').addEventListener('click', handleClearCache);
       $('btn-remote-clear-cache').addEventListener('click', handleClearCache);
 
-      const handleUnbindDevice = () => {
+      $('btn-local-unbind').addEventListener('click', () => {
+        showToast('已解除与云端应用的绑定（原云端应用已保留，随时可重新绑定或新建）');
+      });
+      $('btn-remote-unbind').addEventListener('click', () => {
         showToast('已清除当前浏览器保存的配对密钥（云端与主机绑定保持不变）');
-      };
-      $('btn-local-unbind').addEventListener('click', handleUnbindDevice);
-      $('btn-remote-unbind').addEventListener('click', handleUnbindDevice);
+      });
 
       // Onboarding OS switcher & copy
       const onboardCmd = 'npx --yes @tianacloud/dsh-remote@latest connect --app ' + DEMO_APP_ID + ' --space ' + DEMO_SPACE;

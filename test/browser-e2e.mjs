@@ -1106,7 +1106,9 @@ try {
   await localPanelPage.locator('#dshr-renew-token-btn').click();
   await localPanelPage.waitForFunction(() => document.querySelector('#dshr-token-expiry')?.textContent?.includes('30'), undefined, { timeout: 5000 });
   assert.equal(tokenRenewCount, 1);
-  assert.equal(await localPanelPage.locator('#dshr-rebind-form').count(), 1);
+  assert.equal(await localPanelPage.locator('#dshr-unbind-btn').count(), 1);
+  assert.equal(await localPanelPage.locator('#dshr-unbind-dialog').count(), 1);
+  assert.equal(await localPanelPage.locator('#dshr-rebind-form').count(), 0);
   await localPanelPage.locator('#dshr-qr-btn').click();
   const qrMeta = await localPanelPage.evaluate(() => {
     const svg = document.querySelector('#dshr-qr-dialog svg');

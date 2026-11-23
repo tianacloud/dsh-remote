@@ -5,19 +5,22 @@ import { buildWebDist } from './scripts/build-web-dist.mjs';
 import { checkNodeVersion, runConnect } from './src/connect.js';
 import { HostBridge } from './src/host-bridge.js';
 import {
+  buildUnboundState,
   claimBridgeOwnership,
   defaultStatePath,
   detectLocalRunningHost,
   ensureE2eeConfig,
   formatLocalHostConflictError,
   formatPairingKey,
+  isRemoteConfigured,
+  loadNormalizedRemoteState,
   loadRemoteState,
   migrateRemoteState,
   releaseBridgeOwnership,
   saveRemoteState,
   withStateLock,
 } from './src/state.js';
-import { getTianaStatus, provisionTianaRemote } from './src/tiana-cli.js';
+import { clearRemotePolicyIfOwned, getTianaStatus, provisionTianaRemote } from './src/tiana-cli.js';
 
 function parseArgs(argv) {
   const positionals = [];
@@ -76,6 +79,8 @@ Usage:
 
   dsh-remote key [--rotate] [--json]
                                   Show or rotate the local E2EE pairing key
+  dsh-remote unbind [--local-only] [--json]
+                                  Unbind this machine from its cloud app (keeps cloud Web & Function apps)
   dsh-remote status [--json]      Show Tiana login & provisioned remote state (redacted)
   dsh-remote start --port <port>  Attach standalone HostBridge to a local DSH port
     Set DSH_LAUNCH_TOKEN in the environment to authenticate to local DSH.
@@ -143,8 +148,9 @@ async function cmdStatus(flags) {
   }
   const rawState = loadRemoteState();
   const state = rawState ? migrateRemoteState(rawState) : null;
+  const configured = isRemoteConfigured(state);
   let relayHealth = null;
-  if (state?.function?.url && state?.function?.token) {
+  if (configured && state?.function?.url && state?.function?.token) {
     try {
       const health = new URL('/health', state.function.url);
       if (health.protocol !== 'https:' || health.username || health.password) throw new Error('HTTPS required');
@@ -167,20 +173,22 @@ async function cmdStatus(flags) {
   const redactedState = state ? {
     version: state.version,
     configVersion: state.configVersion,
-    enabled: state.enabled,
-    owner: state.owner && { userId: state.owner.userId, tenantId: state.owner.tenantId },
+    configured,
+    enabled: configured && state.enabled !== false,
+    owner: configured && state.owner ? { userId: state.owner.userId, tenantId: state.owner.tenantId } : undefined,
     host: state.host && { hostId: state.host.hostId, hostName: state.host.hostName },
-    e2ee: state.e2ee?.secret ? {
+    e2ee: configured && state.e2ee?.secret ? {
       enabled: true, algorithm: state.e2ee.algorithm,
       fingerprint: state.e2ee.fingerprint, createdAt: state.e2ee.createdAt,
     } : { enabled: false },
-    function: state.function && {
+    function: configured && state.function ? {
       id: state.function.id, url: state.function.url, name: state.function.name,
       tokenConfigured: Boolean(state.function.token),
       tokenId: state.function.tokenId, expiresAt: state.function.expiresAt,
-    },
-    web: state.web && { id: state.web.id, endpoint: state.web.endpoint, name: state.web.name },
+    } : undefined,
+    web: configured && state.web ? { id: state.web.id, endpoint: state.web.endpoint, name: state.web.name } : undefined,
     network: state.network,
+    lastBound: state.lastBound || undefined,
   } : null;
 
   const summary = {
@@ -194,6 +202,7 @@ async function cmdStatus(flags) {
         }
       : tianaStatus,
     statePath: defaultStatePath(),
+    configured,
     state: redactedState,
     relayHealth,
   };
@@ -204,8 +213,11 @@ async function cmdStatus(flags) {
   }
 
   console.log('Tiana Login :', summary.tiana?.loggedIn ? `${summary.tiana.email} (${summary.tiana.space})` : 'NOT LOGGED IN');
-  if (!redactedState) {
-    console.log('Remote State: Not provisioned yet. Run `dsh-remote connect --app <appId>` or `dsh-remote setup`.');
+  if (!configured) {
+    console.log('Remote State: Not bound yet. Run `dsh-remote connect --app <appId>` or `dsh-remote setup`.');
+    if (redactedState?.lastBound?.webId) {
+      console.log('Last Bound  :', `${redactedState.lastBound.webName} (${redactedState.lastBound.webId})`);
+    }
     return;
   }
   console.log('Host        :', `${redactedState.host?.hostId} (${redactedState.host?.hostName})`);
@@ -218,14 +230,69 @@ async function cmdStatus(flags) {
   console.log('Tip         : Run `dsh-remote key` to view the pairing key in a private terminal.');
 }
 
+async function cmdUnbind(flags) {
+  const statePath = defaultStatePath();
+  const clearCloudPolicy = !Boolean(flags['local-only']);
+  const log = flags.json ? (...args) => console.error(...args) : console.log;
+  const prevState = loadNormalizedRemoteState(statePath);
+  if (!isRemoteConfigured(prevState)) {
+    const out = {
+      ok: true,
+      unbound: true,
+      alreadyUnbound: true,
+      cloudPolicyCleared: false,
+      cloudPolicyWarning: '',
+      lastBound: prevState?.lastBound || null,
+    };
+    if (flags.json) console.log(JSON.stringify(out, null, 2));
+    else console.log('[dsh-remote] Already unbound (no active cloud binding found).');
+    return;
+  }
+
+  let cloudPolicyCleared = false;
+  let cloudPolicyWarning = '';
+  if (clearCloudPolicy) {
+    const res = await clearRemotePolicyIfOwned(prevState, { log });
+    cloudPolicyCleared = Boolean(res?.cleared);
+    cloudPolicyWarning = res?.warning || '';
+  }
+
+  const nextState = await withStateLock(() => {
+    const latest = loadNormalizedRemoteState(statePath) || prevState;
+    const unbound = buildUnboundState(latest);
+    saveRemoteState(unbound, statePath);
+    return unbound;
+  }, statePath);
+
+  const out = {
+    ok: true,
+    unbound: true,
+    alreadyUnbound: false,
+    cloudPolicyCleared,
+    cloudPolicyWarning,
+    lastBound: nextState.lastBound || null,
+  };
+  if (flags.json) {
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
+  console.log('[dsh-remote] Unbound this machine from its cloud app (cloud Web & Function apps were preserved).');
+  if (cloudPolicyWarning) {
+    console.log(`[dsh-remote] Note: ${cloudPolicyWarning}`);
+  }
+  if (nextState.lastBound?.webId) {
+    console.log(`[dsh-remote] Rebind anytime with: dsh-remote connect --app ${nextState.lastBound.webId}`);
+  }
+}
+
 async function cmdKey(flags) {
   const rotate = Boolean(flags.rotate);
   const result = await withStateLock(() => {
     const rawState = loadRemoteState();
-    if (!rawState) {
-      throw new Error('Remote state not found. Run `dsh-remote connect` or `dsh-remote setup` first.');
+    const state = rawState ? migrateRemoteState(rawState) : null;
+    if (!state || (!isRemoteConfigured(state) && !state.e2ee?.secret && !state.pendingSetup && !state.pendingBind)) {
+      throw new Error('Remote access is not bound yet. Run `dsh-remote connect` or `dsh-remote setup` first.');
     }
-    const state = migrateRemoteState(rawState);
     const { changed, e2ee } = ensureE2eeConfig(state, { rotate });
     const hostId = state.host?.hostId || 'dsh-host';
     if (changed) {
@@ -265,8 +332,8 @@ async function cmdKey(flags) {
 
 async function cmdStart(flags) {
   const rawState = loadRemoteState();
-  if (!rawState?.function?.url || !rawState?.function?.token) {
-    throw new Error('Remote state not found. Run `dsh-remote connect` or `dsh-remote setup` first.');
+  if (!isRemoteConfigured(rawState) || !rawState?.function?.token) {
+    throw new Error('Remote access is not bound yet. Run `dsh-remote connect` or `dsh-remote setup` first.');
   }
   const state = migrateRemoteState(rawState);
   const port = Number(flags.port || process.env.DSH_PORT || 0);
@@ -359,6 +426,9 @@ async function main() {
       break;
     case 'key':
       await cmdKey(flags);
+      break;
+    case 'unbind':
+      await cmdUnbind(flags);
       break;
     case 'status':
       await cmdStatus(flags);

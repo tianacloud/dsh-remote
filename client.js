@@ -440,7 +440,7 @@
       sessionsEmpty: '当前没有活跃的远端浏览器会话',
       disconnect: '断开',
       disconnectAll: '断开全部',
-      settingsTitle: '主机、换绑与网络设置',
+      settingsTitle: '主机、绑定与网络设置',
       hostName: '主机显示名',
       p2pToggle: '启用 WebRTC P2P 直连优先',
       stunUrls: 'STUN 服务器（逗号分隔）',
@@ -490,8 +490,17 @@
       rebindForceLabel: '若该应用已绑定其他电脑，强制换绑到本机',
       bindSubmitBtn: '立即免编译绑定',
       createSubmitBtn: '立即创建并配置',
-      rebindSectionTitle: '切换／换绑云端应用',
-      rebindBtn: '切换并换绑应用',
+      cloudBindingTitle: '云端应用绑定',
+      unbindBtn: '解除绑定',
+      unbinding: '正在解除绑定…',
+      unbindDesc: '解除后本机将停止远端隧道并回到未绑定状态，不会删除云端应用，随时可重新绑定或新建应用。',
+      unbindConfirmTitle: '确认解除云端应用绑定？',
+      unbindConfirmBody: '解除绑定将立即停止远端隧道、断开所有在线远端会话，并清空本机保存的绑定信息与配对密钥。不会删除云端 Tiana Web 应用与 Relay Function，之后随时可重新绑定原应用、绑定其他应用或新建应用。',
+      unbindConfirmBtn: '确认解除绑定',
+      unbindDone: '已解除与云端应用的绑定（原云端应用已保留）',
+      unbindDoneCloudWarn: '本机已解除绑定，云端策略因离线或权限暂未同步清理，不影响后续重绑',
+      lastBoundLabel: '上次绑定',
+      rebindLastBoundBtn: '填入并重绑',
       provisionRunning: '正在执行配置任务…',
       provisionDone: '配置已完成',
     };
@@ -503,7 +512,7 @@
       subtitleRemote: 'Connected to your local DSH host via E2EE tunnel',
       statusOnline: 'Online',
       statusPaused: 'Paused',
-      statusUnconfigured: 'Not configured',
+      statusUnconfigured: 'Not Bound',
       statusReconnecting: 'Reconnecting…',
       statusConflictStopped: 'Stopped (Host Conflict)',
       statusCredentialsRevoked: 'Credentials Revoked',
@@ -538,7 +547,7 @@
       sessionsEmpty: 'No active remote sessions',
       disconnect: 'Disconnect',
       disconnectAll: 'Disconnect All',
-      settingsTitle: 'Host, Rebind & Network Settings',
+      settingsTitle: 'Host, Binding & Network Settings',
       hostName: 'Host Display Name',
       p2pToggle: 'Prefer WebRTC P2P Direct Connection',
       stunUrls: 'STUN Servers (comma-separated)',
@@ -588,8 +597,17 @@
       rebindForceLabel: 'Force rebind to this machine if bound to another host',
       bindSubmitBtn: 'Bind Now (Zero Recompile)',
       createSubmitBtn: 'Create & Provision',
-      rebindSectionTitle: 'Switch / Rebind Cloud App',
-      rebindBtn: 'Switch & Rebind App',
+      cloudBindingTitle: 'Cloud App Binding',
+      unbindBtn: 'Unbind Cloud App',
+      unbinding: 'Unbinding…',
+      unbindDesc: 'Stops the remote tunnel on this host and returns to the unbound state without deleting your cloud app. You can rebind or create a new app anytime.',
+      unbindConfirmTitle: 'Unbind this cloud app?',
+      unbindConfirmBody: 'Unbinding immediately stops the remote tunnel, disconnects all active remote sessions, and clears local binding credentials and pairing keys. Your cloud Tiana Web app and Relay Function will NOT be deleted, and you can rebind or create a new app anytime.',
+      unbindConfirmBtn: 'Confirm Unbind',
+      unbindDone: 'Unbound from cloud app (your cloud app has been preserved)',
+      unbindDoneCloudWarn: 'Local host unbound; cloud policy cleanup was skipped (offline or permissions), which will not affect rebinding',
+      lastBoundLabel: 'Last Bound',
+      rebindLastBoundBtn: 'Rebind Now',
       provisionRunning: 'Provisioning in progress…',
       provisionDone: 'Provisioning completed',
     };
@@ -838,13 +856,13 @@
       const settingsDirtyRef = useRef(false);
       const [settingsDirty, setSettingsDirty] = useState(false);
 
-      // Provision / Onboarding / Rebind state
+      // Provision / Onboarding / Unbind state
       const [onboardTab, setOnboardTab] = useState('bind');
       const [bindWebId, setBindWebId] = useState('');
       const [bindHostName, setBindHostName] = useState('');
+      const bindHostNameDirtyRef = useRef(false);
       const [bindForceRebind, setBindForceRebind] = useState(false);
       const [createWebName, setCreateWebName] = useState('dsh-tiana-remote');
-      const [rebindWebId, setRebindWebId] = useState('');
       const [provisionStatus, setProvisionStatus] = useState(null);
       const [lastProvisionPayload, setLastProvisionPayload] = useState(null);
       const [pendingForceTakeover, setPendingForceTakeover] = useState(null);
@@ -852,12 +870,16 @@
       const rotateDialogRef = useRef(null);
       const qrDialogRef = useRef(null);
       const forceTakeoverDialogRef = useRef(null);
+      const unbindDialogRef = useRef(null);
 
       const hydrateDraftsFromOverview = useCallback((data) => {
         if (!data) return;
         setHostNameDraft(data.host?.hostName || '');
         setP2pDraft(data.network?.p2pEnabled !== false);
         setStunDraft((data.network?.stunUrls || []).join(','));
+        if (!bindHostNameDirtyRef.current && data.host?.hostName) {
+          setBindHostName(data.host.hostName);
+        }
       }, []);
 
       const markDirty = () => {
@@ -1245,6 +1267,37 @@
         }
       };
 
+      const handleConfirmUnbind = async () => {
+        setBusy('unbind');
+        try {
+          const resp = await fetch('/api/tiana-remote/admin/unbind', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ confirm: true }),
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (resp.ok) {
+            setRevealedKey('');
+            setProvisionStatus(null);
+            setLastProvisionPayload(null);
+            settingsDirtyRef.current = false;
+            setSettingsDirty(false);
+            bindHostNameDirtyRef.current = false;
+            if (overview?.host?.hostName) {
+              setBindHostName(overview.host.hostName);
+            }
+            setBindWebId('');
+            setBindForceRebind(false);
+            setToast(data.cloudPolicyWarning ? t('unbindDoneCloudWarn') : t('unbindDone'));
+            await fetchState();
+          } else {
+            setToast(data.error || `Unbind failed (HTTP ${resp.status})`);
+          }
+        } finally {
+          setBusy('');
+        }
+      };
+
       const handleDisconnectSession = async (sessionId) => {
         await fetch('/api/tiana-remote/admin/sessions/disconnect', {
           method: 'POST',
@@ -1496,6 +1549,32 @@
                     });
                   },
                 },
+                  overview?.lastBound?.webId && h('div', { className: 'dshr-action-item', id: 'dshr-last-bound-bar' },
+                    h('div', { className: 'dshr-action-copy' },
+                      h('div', { className: 'dshr-action-title' },
+                        `${t('lastBoundLabel')}${isZh ? '：' : ': '}${overview.lastBound.webName || overview.lastBound.webId} (${overview.lastBound.webId})`,
+                      ),
+                      overview.lastBound.endpoint && h('div', { className: 'dshr-action-desc' }, overview.lastBound.endpoint),
+                    ),
+                    h('div', { className: 'dshr-action-control' },
+                      h('button', {
+                        type: 'button',
+                        id: 'dshr-last-bound-rebind-btn',
+                        className: 'dshr-btn dshr-btn-primary',
+                        disabled: busy === 'provision' || Boolean(provisionStatus?.running),
+                        onClick: () => {
+                          const lastId = overview.lastBound.webId;
+                          setBindWebId(lastId);
+                          void startProvisionRequest({
+                            mode: 'bind',
+                            webId: lastId,
+                            hostName: bindHostName.trim() || overview?.host?.hostName || undefined,
+                            rebind: bindForceRebind,
+                          });
+                        },
+                      }, t('rebindLastBoundBtn')),
+                    ),
+                  ),
                   h('label', { className: 'dshr-field' },
                     h('span', { className: 'dshr-label' }, t('webIdLabel')),
                     h('input', {
@@ -1509,10 +1588,14 @@
                   h('label', { className: 'dshr-field' },
                     h('span', { className: 'dshr-label' }, t('hostName')),
                     h('input', {
+                      id: 'dshr-bind-hostname',
                       className: 'dshr-input',
                       value: bindHostName,
                       placeholder: 'My-Workstation',
-                      onChange: (e) => setBindHostName(e.target.value),
+                      onChange: (e) => {
+                        bindHostNameDirtyRef.current = true;
+                        setBindHostName(e.target.value);
+                      },
                     }),
                   ),
                   h('label', { className: 'dshr-switch' },
@@ -1556,10 +1639,14 @@
                   h('label', { className: 'dshr-field' },
                     h('span', { className: 'dshr-label' }, t('hostName')),
                     h('input', {
+                      id: 'dshr-create-hostname',
                       className: 'dshr-input',
                       value: bindHostName,
                       placeholder: 'My-Workstation',
-                      onChange: (e) => setBindHostName(e.target.value),
+                      onChange: (e) => {
+                        bindHostNameDirtyRef.current = true;
+                        setBindHostName(e.target.value);
+                      },
                     }),
                   ),
                   h('div', { className: 'dshr-row' },
@@ -1720,37 +1807,31 @@
 
             h('div', { className: 'dshr-divider' }),
 
-            // Rebind / switch cloud app inline form
-            h('form', {
-              id: 'dshr-rebind-form',
-              style: { display: 'grid', gap: 10 },
-              onSubmit: (e) => {
-                e.preventDefault();
-                if (!rebindWebId.trim()) return;
-                void startProvisionRequest({
-                  mode: 'bind',
-                  webId: rebindWebId.trim(),
-                  hostName: hostNameDraft.trim() || undefined,
-                  rebind: true,
-                });
-              },
-            },
-              h('span', { className: 'dshr-label', style: { fontWeight: 600 } }, t('rebindSectionTitle')),
-              h('div', { className: 'dshr-row' },
-                h('input', {
-                  id: 'dshr-rebind-web-id',
-                  className: 'dshr-input',
-                  style: { flex: 1, minWidth: 200 },
-                  value: rebindWebId,
-                  placeholder: t('webIdLabel'),
-                  onChange: (e) => setRebindWebId(e.target.value),
-                }),
-                h('button', {
-                  type: 'submit',
-                  id: 'dshr-rebind-submit',
-                  className: 'dshr-btn',
-                  disabled: busy === 'provision' || Boolean(provisionStatus?.running) || !rebindWebId.trim(),
-                }, t('rebindBtn')),
+            // Cloud app binding summary + unbind action (replaces inline rebind form)
+            h('div', { className: 'dshr-action-list', id: 'dshr-cloud-binding-section' },
+              h('div', { className: 'dshr-action-item', id: 'dshr-local-action-unbind' },
+                h('div', { className: 'dshr-action-copy' },
+                  h('div', { className: 'dshr-action-title' }, t('cloudBindingTitle')),
+                  h('div', { className: 'dshr-row', id: 'dshr-cloud-binding-meta' },
+                    h('span', { className: 'dshr-badge' },
+                      `${overview?.web?.name || 'dsh-tiana-remote'} (${overview?.web?.id || '—'})`,
+                    ),
+                    (overview?.owner?.email || overview?.owner?.displayName || overview?.owner?.spaceName) && h('span', { className: 'dshr-badge' },
+                      [overview?.owner?.email || overview?.owner?.displayName, overview?.owner?.spaceName].filter(Boolean).join(' · '),
+                    ),
+                  ),
+                  h('div', { className: 'dshr-action-desc', id: 'dshr-unbind-desc' }, t('unbindDesc')),
+                ),
+                h('div', { className: 'dshr-action-control' },
+                  h('button', {
+                    type: 'button',
+                    id: 'dshr-unbind-btn',
+                    className: 'dshr-btn dshr-btn-danger',
+                    'aria-describedby': 'dshr-unbind-desc',
+                    disabled: busy === 'unbind' || Boolean(provisionStatus?.running),
+                    onClick: () => unbindDialogRef.current?.showModal?.(),
+                  }, busy === 'unbind' ? t('unbinding') : t('unbindBtn')),
+                ),
               ),
               renderProvisionProgress(),
             ),
@@ -1814,6 +1895,29 @@
             h('form', { method: 'dialog', className: 'dshr-row', style: { justifyContent: 'flex-end' } },
               h('button', { type: 'submit', value: 'cancel', autoFocus: true, className: 'dshr-btn', id: 'dshr-force-takeover-cancel' }, t('cancel')),
               h('button', { type: 'submit', value: 'confirm', className: 'dshr-btn dshr-btn-danger', id: 'dshr-force-takeover-confirm' }, t('forceTakeoverConfirmBtn')),
+            ),
+          ),
+          // Native modal <dialog> for explicit secondary confirmation of Unbind Cloud App (autofocus on safe Cancel)
+          h('dialog', {
+            ref: unbindDialogRef,
+            className: 'dshr-dialog',
+            id: 'dshr-unbind-dialog',
+            'aria-labelledby': 'dshr-unbind-title',
+            onClose: (e) => {
+              const dialog = e.currentTarget;
+              const val = dialog.returnValue;
+              dialog.returnValue = '';
+              if (val === 'confirm') void handleConfirmUnbind();
+            },
+          },
+            h('h3', { id: 'dshr-unbind-title', style: { margin: '0 0 8px', fontSize: 16 } }, t('unbindConfirmTitle')),
+            overview?.web?.id && h('p', {
+              style: { margin: '0 0 8px', fontSize: 13, fontWeight: 600 },
+            }, `${overview.web.name || 'dsh-tiana-remote'} (${overview.web.id})${overview?.owner?.email || overview?.owner?.spaceName ? ` · ${[overview.owner.email, overview.owner.spaceName].filter(Boolean).join(' / ')}` : ''}`),
+            h('p', { style: { margin: '0 0 16px', fontSize: 13, lineHeight: 1.5, opacity: 0.85 } }, t('unbindConfirmBody')),
+            h('form', { method: 'dialog', className: 'dshr-row', style: { justifyContent: 'flex-end' } },
+              h('button', { type: 'submit', value: 'cancel', autoFocus: true, className: 'dshr-btn', id: 'dshr-unbind-cancel' }, t('cancel')),
+              h('button', { type: 'submit', value: 'confirm', className: 'dshr-btn dshr-btn-danger', id: 'dshr-unbind-confirm' }, t('unbindConfirmBtn')),
             ),
           ),
         ),

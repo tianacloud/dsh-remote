@@ -398,6 +398,17 @@ export function createRemoteApiHandler(controller, connection = null) {
           return jsonResponse(200, { ok: true, ...result });
         }
 
+        if (path === '/api/tiana-remote/admin/unbind' && method === 'POST') {
+          const body = await readJsonBody(request);
+          if (body.confirm !== true) {
+            return jsonResponse(400, { ok: false, error: 'Explicit confirmation `{ confirm: true }` is required' });
+          }
+          const result = await controller.unbind({
+            clearCloudPolicy: body.clearCloudPolicy !== false,
+          });
+          return jsonResponse(200, { ok: true, ...result });
+        }
+
         if (path === '/api/tiana-remote/admin/provision' && method === 'POST') {
           const body = await readJsonBody(request);
           const started = controller.startProvision(body);
@@ -558,6 +569,7 @@ export function registerRemoteRoutes(connection, controller) {
     { path: '/api/tiana-remote/admin/repair', methods: ['POST'] },
     { path: '/api/tiana-remote/admin/token/renew', methods: ['POST'] },
     { path: '/api/tiana-remote/admin/reconnect', methods: ['POST'] },
+    { path: '/api/tiana-remote/admin/unbind', methods: ['POST'] },
     { path: '/api/tiana-remote/admin/provision', methods: ['POST'] },
     { path: '/api/tiana-remote/admin/provision-status', methods: ['GET', 'HEAD'] },
   ];

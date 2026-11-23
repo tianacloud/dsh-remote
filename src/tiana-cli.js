@@ -13,6 +13,7 @@ import {
   ensureE2eeConfig,
   formatLocalHostConflictError,
   generateE2eeSecret,
+  isRemoteConfigured,
   loadRemoteState,
   loadRemoteStateSnapshot,
   migrateRemoteState,
@@ -164,6 +165,53 @@ export async function updateRemotePolicy(functionId, policy, { log = console.log
   log(`[dsh-remote] Updating DSH_REMOTE_POLICY on Function ${functionId} (zero recompile)...`);
   await setFunctionParameters(functionId, merged, options);
   return policy;
+}
+
+/**
+ * Best-effort cleanup of cloud `DSH_REMOTE_POLICY` on unbind.
+ * NEVER deletes the user's cloud Web app or Relay Function, and NEVER clears
+ * a policy owned by another machine (requires exact hostId + hostDigest match).
+ * Writes `{ kind: 'plain', value: '' }` for `DSH_REMOTE_POLICY` while preserving
+ * all unrelated parameters so `tiana function parameters set --file` never submits
+ * an empty `{}` object and `relay-go` immediately transitions to `paired: false`.
+ * Swallows offline/auth/403/timeout failures and returns `{ cleared: false, warning }`.
+ */
+export async function clearRemotePolicyIfOwned(state, { log = console.log, ...cliOpts } = {}) {
+  const functionId = state?.function?.id;
+  const hostId = state?.host?.hostId;
+  const registrationKey = state?.host?.registrationKey;
+  if (!functionId || !hostId || !registrationKey) {
+    return { cleared: false, skipped: true, reason: 'missing_local_binding', warning: '' };
+  }
+  const opts = { timeoutMs: 15_000, ...cliOpts };
+  try {
+    const existingParams = await getFunctionParameters(functionId, opts);
+    const existingPolicy = parsePolicyFromParameters(existingParams);
+    if (!existingPolicy) {
+      return { cleared: true, alreadyCleared: true, warning: '' };
+    }
+    const localDigest = createHash('sha256').update(registrationKey).digest('hex');
+    const webIdMismatch = Boolean(state?.web?.id && existingPolicy.webId && existingPolicy.webId !== state.web.id);
+    if (existingPolicy.hostId !== hostId || existingPolicy.hostDigest !== localDigest || webIdMismatch) {
+      const warning = 'Cloud Relay policy is currently owned by another host; skipped cloud policy cleanup.';
+      log(`[dsh-remote] ${warning}`);
+      return { cleared: false, skipped: true, reason: 'policy_not_owned', warning };
+    }
+    const nextParams = {
+      ...existingParams,
+      DSH_REMOTE_POLICY: {
+        kind: 'plain',
+        value: '',
+      },
+    };
+    log(`[dsh-remote] Clearing DSH_REMOTE_POLICY on Function ${functionId} (preserving cloud Web & Function apps)...`);
+    await setFunctionParameters(functionId, nextParams, opts);
+    return { cleared: true, warning: '' };
+  } catch (err) {
+    const warning = err instanceof Error ? err.message : String(err);
+    log(`[dsh-remote] Cloud policy cleanup skipped (non-fatal): ${warning}`);
+    return { cleared: false, warning };
+  }
 }
 
 export function validateRelayFunctionShown(fnShown) {
@@ -1128,10 +1176,11 @@ export async function bindTianaRemoteWeb(options = {}) {
       const committedToken = keepLatestToken
         ? { token: latest.function.token, tokenId: latest.function.tokenId, expiresAt: latest.function.expiresAt }
         : activeTokenInfo;
+      const wasConfigured = isRemoteConfigured(prevState);
       const nextState = {
         version: 2,
         configVersion: 2,
-        enabled: latest.enabled !== undefined ? latest.enabled : true,
+        enabled: wasConfigured && latest.enabled !== undefined ? latest.enabled : true,
         updatedAt: new Date().toISOString(),
         owner: {
           userId: status.user.user_id,
@@ -1491,10 +1540,11 @@ export async function provisionTianaRemote(options = {}) {
         const committedToken = keepLatestToken
           ? { token: migrated.function.token, tokenId: migrated.function.tokenId, expiresAt: migrated.function.expiresAt }
           : tokenInfo;
+        const wasConfigured = isRemoteConfigured(prevState);
         const finalState = {
           version: 2,
           configVersion: 2,
-          enabled: migrated.enabled !== undefined ? migrated.enabled : true,
+          enabled: wasConfigured && migrated.enabled !== undefined ? migrated.enabled : true,
           updatedAt: new Date().toISOString(),
           owner: {
             userId: status.user.user_id,

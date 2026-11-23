@@ -198,6 +198,7 @@ export class TunnelClient {
     this.onHostChanged = options.onHostChanged || null;
     this.refreshTarget = options.refreshTarget || null;
     this.onKeyRotated = options.onKeyRotated || null;
+    this.onHostUnbound = options.onHostUnbound || null;
     this.onRtt = options.onRtt || null;
     this.p2pEnabled = true;
     this.nextStreamId = 1;
@@ -441,7 +442,11 @@ export class TunnelClient {
     } else if (message?.type === 'session_closed') {
       const code = Number(message.code) || 1000;
       const reason = String(message.reason || '');
-      if (code === 4001 || reason === 'key_rotated') {
+      if (reason === 'host_unbound' || code === 4002) {
+        const err = Object.assign(new Error('主机已解除云端应用绑定'), { code: 'HOST_UNBOUND', closeCode: code || 4002 });
+        this.close(err, { notifyHost: false });
+        await this.onHostUnbound?.(err);
+      } else if (code === 4001 || reason === 'key_rotated') {
         const err = Object.assign(new Error('主机已轮换配对密钥'), { code: 'KEY_ROTATED', closeCode: 4001 });
         this.close(err);
         await this.onKeyRotated?.(err);
@@ -521,6 +526,11 @@ export class TunnelClient {
       await this.authenticate(next, this.secret);
     } catch (error) {
       next?.ws.close();
+      if (error.code === 'UNPAIRED' && this.onHostUnbound) {
+        this.close(error, { notifyHost: false });
+        await this.onHostUnbound(error);
+        return;
+      }
       if (error.code === 'AUTH_FAILED' && this.onKeyRotated) {
         this.close(error);
         await this.onKeyRotated(error);
@@ -2381,6 +2391,10 @@ async function runRemoteSession(container, tianaContext, shellUI, options = {}) 
         channel.addEventListener('message', (event) => {
           const msg = event.data;
           if (!msg || typeof msg !== 'object') return;
+          if (msg.type === 'dsh-remote:unbound' && (!msg.appId || msg.appId === webId)) {
+            void handleHostUnbound({ broadcast: false });
+            return;
+          }
           if ((msg.type === 'dsh-remote:lock' && (!msg.appId || msg.appId === webId)) ||
               msg.type === 'purge' || msg.type === 'rotate') {
             void lockAndReturnToUnlock({
@@ -2412,6 +2426,29 @@ async function runRemoteSession(container, tianaContext, shellUI, options = {}) 
       sendHostLock: false,
       notice: '主机已轮换配对密钥，请输入新的配对密钥重新解锁。',
     });
+
+    const handleHostUnbound = async ({ broadcast = true } = {}) => {
+      if (lockedOut) return;
+      lockedOut = true;
+      inMemorySecret = null;
+      currentRemembered = false;
+      purgeWebKeys(webId, null, globalThis.localStorage);
+      purgeWebKeys(webId, null, globalThis.sessionStorage);
+      if (broadcast) {
+        try { channel?.postMessage({ type: 'dsh-remote:unbound', appId: webId }); } catch { /* ignore */ }
+      }
+      swBridge.unbind();
+      close();
+      shellUI.destroyAll();
+      await clearWebFrontendCache(webId).catch(() => {});
+      const rootNode = document.getElementById('root');
+      if (rootNode) rootNode.replaceChildren();
+      void runRemoteSession(container, tianaContext, shellUI, {
+        ...options,
+        _skipHashConsume: true,
+        _initialSecret: undefined,
+      });
+    };
 
     const revoked = () => lockAndReturnToUnlock({
       broadcast: true,
@@ -2486,6 +2523,7 @@ async function runRemoteSession(container, tianaContext, shellUI, options = {}) 
           }
         },
         onKeyRotated: handleKeyRotated,
+        onHostUnbound: handleHostUnbound,
         onRtt: () => emitSnapshot(),
       },
     );

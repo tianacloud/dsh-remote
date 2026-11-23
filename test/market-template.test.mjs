@@ -58,6 +58,8 @@ test('packMarketTemplate builds a valid unified install.zip without mutating rel
     const previewHtml = outer.files['showcase/preview.html'].toString('utf8');
     assert.ok(previewHtml.includes('同步/修复云端访问页'), 'preview.html must display updated sync/repair cloud page button copy');
     assert.ok(previewHtml.includes('id="desc-repair-shell"'), 'preview.html must include structured explanation for sync/repair cloud page');
+    assert.ok(previewHtml.includes('云端应用绑定'), 'preview.html must display local cloud app binding section');
+    assert.ok(previewHtml.includes('id="desc-local-unbind"'), 'preview.html must include structured explanation for local unbind');
     assert.ok(!previewHtml.includes('重推静态壳层'), 'preview.html must not contain legacy static shell button copy');
     assert.ok(!previewHtml.includes('静态壳层'), 'preview.html must not contain legacy static shell copy');
 
