@@ -37,6 +37,95 @@ export function tianaBinary(overrideBin) {
   return process.env.TIANA_BIN || (process.platform === 'win32' ? 'tiana.cmd' : 'tiana');
 }
 
+const TIANA_FORBIDDEN_CODES = new Set([
+  'TENANT_MANAGEMENT_FORBIDDEN',
+  'AUTHORIZATION_DENIED',
+  'FORBIDDEN',
+  'PERMISSION_DENIED',
+]);
+
+function isCredentialCommand(args) {
+  return args[0] === 'token' || args[0] === 'status';
+}
+
+function sanitizeCodeToken(value, maxLen = 64) {
+  const s = normalizeIdentityValue(value);
+  if (!s || s.length > maxLen) return '';
+  if (/^(?:dshk1_|gh[pousr]_|npm_|bearer\b)/iu.test(s)) return '';
+  return /^[A-Za-z0-9_.:-]+$/u.test(s) ? s : '';
+}
+
+function parseHttpStatusValue(value) {
+  const n = typeof value === 'number' ? value : Number.parseInt(String(value ?? '').trim(), 10);
+  return Number.isInteger(n) && n >= 100 && n <= 599 ? n : null;
+}
+
+export function parseTianaErrorMeta({ stdout = '', stderr = '', message = '', errorObj = null, credentialCommand = false } = {}) {
+  let parsedError = errorObj && typeof errorObj === 'object' ? errorObj : null;
+  let parsedRoot = null;
+  if (!parsedError && stdout) {
+    const trimmed = String(stdout).trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object') {
+          parsedRoot = parsed;
+          if (parsed.error && typeof parsed.error === 'object') {
+            parsedError = parsed.error;
+          }
+        }
+      } catch {
+        // ignore non-JSON stdout
+      }
+    }
+  }
+
+  const stderrText = String(stderr || '');
+  const fallbackText = stderrText || String(message || '');
+
+  const tianaCode = sanitizeCodeToken(parsedError?.code, 64);
+
+  let httpStatus = parseHttpStatusValue(parsedError?.http_status ?? parsedError?.status ?? parsedRoot?.http_status);
+  if (!httpStatus && fallbackText) {
+    const statusMatch = /\b(?:status|HTTP)\s+(\d{3})\b/iu.exec(fallbackText);
+    if (statusMatch) httpStatus = parseHttpStatusValue(statusMatch[1]);
+  }
+
+  let requestId = sanitizeCodeToken(parsedError?.request_id ?? parsedRoot?.request_id, 128);
+  if (!requestId && fallbackText) {
+    const reqMatch = /\bRequest\s+ID\s*:\s*([A-Za-z0-9_.:-]{1,128})/iu.exec(fallbackText);
+    if (reqMatch) requestId = sanitizeCodeToken(reqMatch[1], 128);
+  }
+
+  const tianaMessage = credentialCommand
+    ? ''
+    : normalizeIdentityValue(parsedError?.message);
+
+  return {
+    ...(tianaCode ? { tianaCode } : {}),
+    ...(httpStatus ? { httpStatus } : {}),
+    ...(requestId ? { requestId } : {}),
+    ...(tianaMessage ? { tianaMessage } : {}),
+  };
+}
+
+function attachTianaErrorMeta(err, meta, { credentialCommand = false } = {}) {
+  if (!meta || typeof meta !== 'object') return err;
+  if (meta.tianaCode) err.tianaCode = meta.tianaCode;
+  if (meta.httpStatus) err.httpStatus = meta.httpStatus;
+  if (meta.requestId) err.requestId = meta.requestId;
+  if (!credentialCommand && meta.tianaMessage) err.tianaMessage = meta.tianaMessage;
+  return err;
+}
+
+export function isTianaForbiddenError(err) {
+  if (!err) return false;
+  if (err.httpStatus === 403 || err.status === 403) return true;
+  if (err.tianaCode && TIANA_FORBIDDEN_CODES.has(String(err.tianaCode).toUpperCase())) return true;
+  const msg = String(err.message || err);
+  return /\b(?:HTTP\s+403|status\s+403|TENANT_MANAGEMENT_FORBIDDEN|AUTHORIZATION_DENIED)\b/iu.test(msg);
+}
+
 export async function runTiana(args, options = {}) {
   const bin = tianaBinary(options.bin || options.tianaBin);
   try {
@@ -48,15 +137,44 @@ export async function runTiana(args, options = {}) {
     });
     return { stdout, stderr };
   } catch (err) {
-    const detail = args[0] === 'token' || args[0] === 'status'
-      ? 'credential command failed'
-      : String(err?.stderr || err?.message || err).trim();
-    throw new Error(`tiana ${args.join(' ')} failed: ${detail}`);
+    const credentialCommand = isCredentialCommand(args);
+    const meta = parseTianaErrorMeta({
+      stdout: err?.stdout,
+      stderr: err?.stderr,
+      message: err?.message,
+      credentialCommand,
+    });
+    let detail;
+    if (credentialCommand) {
+      const metaParts = [];
+      if (meta.httpStatus) metaParts.push(`HTTP ${meta.httpStatus}`);
+      if (meta.tianaCode) metaParts.push(meta.tianaCode);
+      if (meta.requestId) metaParts.push(`Request ID: ${meta.requestId}`);
+      detail = metaParts.length > 0
+        ? `credential command failed (${metaParts.join(', ')})`
+        : 'credential command failed';
+    } else {
+      const rawStderr = String(err?.stderr || '').trim();
+      if (rawStderr) {
+        detail = rawStderr;
+      } else if (meta.tianaMessage || meta.tianaCode) {
+        const metaParts = [];
+        if (meta.httpStatus) metaParts.push(`HTTP ${meta.httpStatus}`);
+        if (meta.tianaCode) metaParts.push(meta.tianaCode);
+        if (meta.requestId) metaParts.push(`Request ID: ${meta.requestId}`);
+        const base = meta.tianaMessage || meta.tianaCode;
+        detail = metaParts.length > 0 ? `${base} (${metaParts.join(', ')})` : base;
+      } else {
+        detail = String(err?.message || err).trim();
+      }
+    }
+    const thrown = new Error(`tiana ${args.join(' ')} failed: ${detail}`);
+    throw attachTianaErrorMeta(thrown, meta, { credentialCommand });
   }
 }
 
 export async function runTianaJSON(args, options = {}) {
-  const { stdout } = await runTiana(args, options);
+  const { stdout, stderr } = await runTiana(args, options);
   const trimmed = stdout.trim();
   let parsed;
   try {
@@ -65,10 +183,27 @@ export async function runTianaJSON(args, options = {}) {
     throw new Error(`tiana ${args.join(' ')} returned invalid JSON`);
   }
   if (parsed?.error) {
-    const credentialCommand = args[0] === 'token' || args[0] === 'status';
-    const msg = credentialCommand ? 'credential command failed'
-      : parsed.error.message || parsed.error.code || 'unknown error';
-    throw new Error(`tiana ${args.join(' ')} error: ${msg}`);
+    const credentialCommand = isCredentialCommand(args);
+    const meta = parseTianaErrorMeta({
+      stdout,
+      stderr,
+      errorObj: parsed.error,
+      credentialCommand,
+    });
+    let msg;
+    if (credentialCommand) {
+      const metaParts = [];
+      if (meta.httpStatus) metaParts.push(`HTTP ${meta.httpStatus}`);
+      if (meta.tianaCode) metaParts.push(meta.tianaCode);
+      if (meta.requestId) metaParts.push(`Request ID: ${meta.requestId}`);
+      msg = metaParts.length > 0
+        ? `credential command failed (${metaParts.join(', ')})`
+        : 'credential command failed';
+    } else {
+      msg = parsed.error.message || parsed.error.code || 'unknown error';
+    }
+    const thrown = new Error(`tiana ${args.join(' ')} error: ${msg}`);
+    throw attachTianaErrorMeta(thrown, meta, { credentialCommand });
   }
   return parsed?.data ?? parsed;
 }
@@ -79,6 +214,34 @@ export async function getTianaStatus(options = {}) {
     throw new Error('Not logged in to Tiana. Run `tiana login` first.');
   }
   return data;
+}
+
+export async function listTianaSpaces(options = {}) {
+  const data = await runTianaJSON(['space', 'list', '--json'], options);
+  const rawItems = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.items)
+      ? data.items
+      : Array.isArray(data?.spaces)
+        ? data.spaces
+        : Array.isArray(data?.tenants)
+          ? data.tenants
+          : [];
+  return rawItems
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const tenantId = normalizeIdentityValue(item.tenant_id ?? item.space_id ?? item.id);
+      if (!tenantId) return null;
+      return {
+        tenantId,
+        displayName: normalizeIdentityValue(item.display_name ?? item.name),
+        role: normalizeIdentityValue(item.role),
+        isCurrent: Boolean(item.is_current ?? item.current),
+        isDefault: Boolean(item.is_default ?? item.default),
+        raw: item,
+      };
+    })
+    .filter(Boolean);
 }
 
 export async function listTianaWebApps(options = {}) {
@@ -98,7 +261,22 @@ export async function getWebFunctionBinding(webId, options = {}) {
 }
 
 export async function getFunctionParameters(functionId, options = {}) {
-  const data = await runTianaJSON(['function', 'parameters', 'get', functionId, '--json'], options);
+  const { status = null, webId = '', ...cliOpts } = options;
+  let data;
+  try {
+    data = await runTianaJSON(['function', 'parameters', 'get', functionId, '--json'], cliOpts);
+  } catch (err) {
+    if (isTianaForbiddenError(err)) {
+      throw await buildForbiddenStepError(err, {
+        command: `tiana function parameters get ${functionId}`,
+        resource: `Function ${functionId}`,
+        webId,
+        status,
+        cliOpts,
+      });
+    }
+    throw err;
+  }
   const params = data?.parameters && typeof data.parameters === 'object' ? data.parameters : data;
   if (!params || typeof params !== 'object' || Array.isArray(params)) {
     throw new Error(`Unexpected function parameters response for ${functionId}`);
@@ -107,16 +285,30 @@ export async function getFunctionParameters(functionId, options = {}) {
 }
 
 export async function setFunctionParameters(functionId, paramsObj, options = {}) {
+  const { status = null, webId = '', ...cliOpts } = options;
   const temp = mkdtempSync(join(tmpdir(), 'dsh-remote-params-'));
   try {
     const paramsFile = join(temp, 'parameters.json');
     writeFileSync(paramsFile, `${JSON.stringify(paramsObj, null, 2)}\n`, { mode: 0o600 });
-    return await runTianaJSON([
-      'function', 'parameters', 'set',
-      functionId,
-      '--file', paramsFile,
-      '--json',
-    ], options);
+    try {
+      return await runTianaJSON([
+        'function', 'parameters', 'set',
+        functionId,
+        '--file', paramsFile,
+        '--json',
+      ], cliOpts);
+    } catch (err) {
+      if (isTianaForbiddenError(err)) {
+        throw await buildForbiddenStepError(err, {
+          command: `tiana function parameters set ${functionId}`,
+          resource: `Function ${functionId}`,
+          webId,
+          status,
+          cliOpts,
+        });
+      }
+      throw err;
+    }
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -399,29 +591,60 @@ export async function probeRelayHostStatus(fnUrl, token, {
   };
 }
 
-async function ensureRelayFunction({ functionName, functionId, log = console.log, ...cliOpts }) {
+async function showRelayFunction(functionId, { status = null, webId = '', ...cliOpts } = {}) {
+  try {
+    return await runTianaJSON(['function', 'show', functionId, '--json'], cliOpts);
+  } catch (err) {
+    if (isTianaForbiddenError(err)) {
+      throw await buildForbiddenStepError(err, {
+        command: `tiana function show ${functionId}`,
+        resource: `Function ${functionId}`,
+        webId,
+        status,
+        cliOpts,
+      });
+    }
+    throw err;
+  }
+}
+
+async function ensureRelayFunction({ functionName, functionId, status = null, webId = '', log = console.log, ...cliOpts }) {
   if (functionId) {
     log(`[dsh-remote] Reusing configured Function ${functionId}`);
-    const shown = await runTianaJSON(['function', 'show', functionId, '--json'], cliOpts);
+    const shown = await showRelayFunction(functionId, { status, webId, ...cliOpts });
     return { instance: shown.instance };
   }
 
   log(`[dsh-remote] Creating Function "${functionName}"...`);
-  const created = await runTianaJSON([
-    'function', 'create', '--wait',
-    '-m', 'DSH Remote WebSocket rendezvous relay',
-    '--json',
-    functionName,
-  ], { ...cliOpts, timeoutMs: 240_000 });
+  let created;
+  try {
+    created = await runTianaJSON([
+      'function', 'create', '--wait',
+      '-m', 'DSH Remote WebSocket rendezvous relay',
+      '--json',
+      functionName,
+    ], { ...cliOpts, timeoutMs: 240_000 });
+  } catch (err) {
+    if (isTianaForbiddenError(err)) {
+      throw await buildForbiddenStepError(err, {
+        command: `tiana function create ${functionName}`,
+        resource: `Function "${functionName}"`,
+        webId,
+        status,
+        cliOpts,
+      });
+    }
+    throw err;
+  }
   const createdId = created?.instance_id || created?.instance?.id || created?.id;
   if (!createdId) {
     throw new Error(`Unexpected function create response: ${JSON.stringify(created)}`);
   }
-  const shown = await runTianaJSON(['function', 'show', createdId, '--json'], cliOpts);
+  const shown = await showRelayFunction(createdId, { status, webId, ...cliOpts });
   return { instance: shown?.instance ?? { id: createdId, display_name: functionName }, details: shown?.function ?? {}, release: shown?.release };
 }
 
-async function syncAndPublishRelayFunction(functionId, webId, { forcePublish = false, log = console.log, ...cliOpts } = {}) {
+async function syncAndPublishRelayFunction(functionId, webId, { forcePublish = false, status = null, log = console.log, ...cliOpts } = {}) {
   const goModPath = join(RELAY_GO_DIR, 'go.mod');
   const desiredGoMod = readFileSync(goModPath, 'utf8');
   const template = readFileSync(join(RELAY_GO_DIR, 'main.go'), 'utf8');
@@ -477,7 +700,7 @@ async function syncAndPublishRelayFunction(functionId, webId, { forcePublish = f
     return Boolean(builds?.items?.some((build) => build.id === published.id &&
       build.source_commit === commit && build.build_commit === published.build_commit));
   }
-  const shown = await runTianaJSON(['function', 'show', functionId, '--json'], cliOpts);
+  const shown = await showRelayFunction(functionId, { status, webId, ...cliOpts });
   if (!forcePublish && sameSource && await isPublished(shown)) {
     log('[dsh-remote] The configured relay source is already published');
     return shown;
@@ -486,12 +709,12 @@ async function syncAndPublishRelayFunction(functionId, webId, { forcePublish = f
   log(`[dsh-remote] Building & publishing Function ${functionId}...`);
   await runTianaJSON(['function', 'publish', '--commit', commit, '--wait', '--json', functionId],
     { ...cliOpts, timeoutMs: 300_000 });
-  const deployed = await runTianaJSON(['function', 'show', functionId, '--json'], cliOpts);
+  const deployed = await showRelayFunction(functionId, { status, webId, ...cliOpts });
   if (!(await isPublished(deployed))) throw new Error('The relay release does not match the configured source');
   return deployed;
 }
 
-export async function ensureHostToken(state, functionId, { rotateToken = false, log = console.log, ...cliOpts } = {}) {
+export async function ensureHostToken(state, functionId, { rotateToken = false, status = null, webId = '', log = console.log, ...cliOpts } = {}) {
   const now = Math.floor(Date.now() / 1000);
   if (!rotateToken && state?.function?.id === functionId && state?.function?.token &&
       state.function.expiresAt > now + 86400) {
@@ -501,13 +724,28 @@ export async function ensureHostToken(state, functionId, { rotateToken = false, 
   const expiresAt = now + 30 * 86400;
   const tokenName = `${DEFAULT_TOKEN_NAME}-${Date.now()}`;
   log(`[dsh-remote] Creating instance access token for ${functionId}...`);
-  const receipt = await runTianaJSON([
-    'token', 'create',
-    '--name', tokenName,
-    '--expires-at', String(expiresAt),
-    '--json',
-    functionId,
-  ], cliOpts);
+  let receipt;
+  try {
+    receipt = await runTianaJSON([
+      'token', 'create',
+      '--name', tokenName,
+      '--expires-at', String(expiresAt),
+      '--json',
+      functionId,
+    ], cliOpts);
+  } catch (err) {
+    if (isTianaForbiddenError(err)) {
+      throw await buildForbiddenStepError(err, {
+        command: `tiana token create ${functionId}`,
+        resource: `Function ${functionId}`,
+        webId,
+        status,
+        cliOpts,
+        credentialCommand: true,
+      });
+    }
+    throw err;
+  }
   if (!receipt?.token) {
     throw new Error('Instance Token receipt was missing its credential');
   }
@@ -523,13 +761,26 @@ async function ensureWebApp({ webName, webId, status, log = console.log, ...cliO
     return existing;
   }
   log(`[dsh-remote] Creating Web app "${webName}"...`);
-  const created = await runTianaJSON([
-    'web', 'create',
-    '--entry', 'dsh-remote-entry.mjs',
-    '--description', 'DeepSeek Harness 远程访问入口（由 @tianacloud/dsh-remote 自动编排）',
-    '--json',
-    webName,
-  ], cliOpts);
+  let created;
+  try {
+    created = await runTianaJSON([
+      'web', 'create',
+      '--entry', 'dsh-remote-entry.mjs',
+      '--description', 'DeepSeek Harness 远程访问入口（由 @tianacloud/dsh-remote 自动编排）',
+      '--json',
+      webName,
+    ], cliOpts);
+  } catch (err) {
+    if (isTianaForbiddenError(err)) {
+      throw await buildForbiddenStepError(err, {
+        command: `tiana web create ${webName}`,
+        resource: `Web "${webName}"`,
+        status,
+        cliOpts,
+      });
+    }
+    throw err;
+  }
   const createdApp = created?.project ?? created?.app ?? created;
   if (createdApp?.id && !normalizeIdentityValue(createdApp.owner_id) && !normalizeIdentityValue(createdApp.tenant_id)) {
     const items = await listWebAppsForOwnership(createdApp.id, status, cliOpts);
@@ -543,28 +794,223 @@ function normalizeIdentityValue(value) {
   return value == null ? '' : String(value).trim();
 }
 
-function formatOwnershipError(baseMsg, { webId, status, webApp, binding, reason }) {
-  const { user, space } = status ?? {};
-  const account = [user?.display_name, user?.email, user?.user_id].map(normalizeIdentityValue).filter(Boolean);
-  const spaceId = normalizeIdentityValue(space?.tenant_id) || normalizeIdentityValue(user?.tenant_id);
-  const currentSpace = [space?.display_name, spaceId, space?.role].map(normalizeIdentityValue).filter(Boolean);
+export function formatTianaAccount(userOrStatus, { includeUserId = true } = {}) {
+  const user = userOrStatus?.user && typeof userOrStatus.user === 'object'
+    ? userOrStatus.user
+    : userOrStatus;
+  const displayName = normalizeIdentityValue(user?.display_name ?? user?.displayName);
+  const email = normalizeIdentityValue(user?.email);
+  const userId = normalizeIdentityValue(user?.user_id ?? user?.userId);
+  const parts = [];
+  for (const item of includeUserId ? [displayName, email, userId] : [displayName, email]) {
+    if (item && !parts.includes(item)) parts.push(item);
+  }
+  if (parts.length > 0) return parts.join(' / ');
+  if (userId) return userId;
+  return '(unknown)';
+}
+
+export function formatTianaSpace(statusOrSpace) {
+  const user = statusOrSpace?.user && typeof statusOrSpace.user === 'object' ? statusOrSpace.user : null;
+  const space = statusOrSpace?.space && typeof statusOrSpace.space === 'object'
+    ? statusOrSpace.space
+    : (user ? null : statusOrSpace);
+  const spaceId = normalizeIdentityValue(space?.tenant_id ?? space?.space_id ?? space?.id) ||
+    normalizeIdentityValue(user?.tenant_id ?? user?.tenantId);
+  const parts = [];
+  for (const item of [
+    normalizeIdentityValue(space?.display_name ?? space?.name),
+    spaceId,
+    normalizeIdentityValue(space?.role),
+  ]) {
+    if (item && !parts.includes(item)) parts.push(item);
+  }
+  return parts.join(' / ') || '(unknown)';
+}
+
+function buildConnectRetryCommand({ webId = '', spaceId = '', rebind = false, forceRebind = false } = {}) {
+  const parts = ['npx', '--yes', '@tianacloud/dsh-remote@latest', 'connect'];
+  if (webId) parts.push('--app', webId);
+  if (spaceId) parts.push('--space', spaceId);
+  if (rebind) parts.push('--rebind');
+  if (forceRebind) parts.push('--force-rebind');
+  return parts.join(' ');
+}
+
+function formatAccessibleSpaceEntry(space, currentSpaceId = '') {
+  const id = space.tenantId;
+  const label = space.displayName ? `${space.displayName} (${id})` : id;
+  const tags = [];
+  if (space.role) tags.push(space.role);
+  if (space.isCurrent || (currentSpaceId && id === currentSpaceId)) tags.push('当前');
+  if (space.isDefault) tags.push('默认');
+  return tags.length > 0 ? `${label} [${tags.join(', ')}]` : label;
+}
+
+async function buildSpaceSwitchForbiddenError(err, {
+  spaceId,
+  webId = '',
+  status = null,
+  rebind = false,
+  forceRebind = false,
+  cliOpts = {},
+} = {}) {
+  const httpStatus = err?.httpStatus || 403;
+  const code = err?.tianaCode || 'FORBIDDEN';
+  const requestId = err?.requestId || '';
+  const currentSpaceId = normalizeIdentityValue(status?.space?.tenant_id) || normalizeIdentityValue(status?.user?.tenant_id);
+  const accountText = formatTianaAccount(status, { includeUserId: true });
+  const spaceText = formatTianaSpace(status);
+  const retryCmd = buildConnectRetryCommand({ webId, spaceId, rebind, forceRebind });
+
+  let spacesFetched = false;
+  let accessibleSpaces = [];
+  try {
+    accessibleSpaces = await listTianaSpaces({ ...cliOpts, timeoutMs: cliOpts.timeoutMs ?? 15_000 });
+    spacesFetched = true;
+  } catch {
+    spacesFetched = false;
+    accessibleSpaces = [];
+  }
+
+  const matchedSpace = spacesFetched
+    ? accessibleSpaces.find((item) => item.tenantId === spaceId) || null
+    : null;
+
+  const lines = [
+    `无法切换到目标 Tiana 空间 "${spaceId}"（HTTP ${httpStatus} / ${code}）。`,
+    `当前本机 CLI 账号：${accountText}`,
+    `当前空间：${spaceText}`,
+    `目标空间 ID：${spaceId}${matchedSpace?.displayName ? ` (${matchedSpace.displayName})` : ''}${matchedSpace?.role ? ` [${matchedSpace.role}]` : ''}`,
+  ];
+  if (webId) {
+    lines.push(`目标 Web 应用：${webId}`);
+  }
+  if (!matchedSpace) {
+    if (spacesFetched) {
+      if (accessibleSpaces.length > 0) {
+        lines.push(`当前账号可访问的空间（共 ${accessibleSpaces.length} 个）：`);
+        for (const item of accessibleSpaces) {
+          lines.push(`  - ${formatAccessibleSpaceEntry(item, currentSpaceId)}`);
+        }
+      } else {
+        lines.push('当前账号可访问的空间：（无）');
+      }
+    } else {
+      lines.push('当前账号可访问的空间：（自动查询 `tiana space list` 失败，可手动运行 `tiana space list` 核对）');
+    }
+  }
+  if (requestId) {
+    lines.push(`Request ID：${requestId}`);
+  }
+
+  lines.push('');
+  if (matchedSpace) {
+    lines.push('原因：目标空间在当前账号的可访问空间列表中，但切换仍返回 HTTP 403，可能是空间成员状态或当前 CLI 会话权限已变更。');
+    lines.push('下一步指引：');
+    lines.push(`1. 运行 \`tiana login\` 刷新当前登录会话后重试：${retryCmd}`);
+    lines.push('2. 若刷新登录后仍然 403，请联系目标空间管理员确认您的成员状态与角色权限。');
+  } else {
+    if (spacesFetched) {
+      lines.push('原因：该空间不在当前登录账号的可访问列表中，最常见原因是本机 Tiana CLI 登录的账号，与浏览器中安装该应用的账号不一致。');
+    } else {
+      lines.push('原因：当前登录账号无权切换到目标空间，最常见原因是本机 Tiana CLI 登录的账号，与浏览器中安装该应用的账号不一致。');
+    }
+    lines.push('下一步指引：');
+    lines.push(`1. 若账号不一致：先运行 \`tiana logout && tiana login\` 登录安装该应用的账号，然后重新运行：${retryCmd}`);
+    lines.push('2. 若确认是同一账号：请联系目标空间管理员将当前账号邀请加入空间后重试，或核对应用所在空间 ID。');
+  }
+
+  const wrapped = new Error(lines.join('\n'));
+  wrapped.code = err?.tianaCode || 'TIANA_FORBIDDEN';
+  if (err?.tianaCode) wrapped.tianaCode = err.tianaCode;
+  wrapped.httpStatus = httpStatus;
+  if (requestId) wrapped.requestId = requestId;
+  wrapped.status = 403;
+  return wrapped;
+}
+
+async function buildForbiddenStepError(err, {
+  command,
+  resource = '',
+  webId = '',
+  status = null,
+  cliOpts = {},
+  credentialCommand = false,
+} = {}) {
+  const httpStatus = err?.httpStatus || 403;
+  const code = err?.tianaCode || 'FORBIDDEN';
+  const requestId = err?.requestId || '';
+
+  let effectiveStatus = status;
+  if (!effectiveStatus) {
+    try {
+      effectiveStatus = await getTianaStatus({ ...cliOpts, timeoutMs: Math.min(cliOpts.timeoutMs ?? 10_000, 10_000) });
+    } catch {
+      effectiveStatus = null;
+    }
+  }
+
+  const accountText = formatTianaAccount(effectiveStatus, { includeUserId: true });
+  const spaceText = formatTianaSpace(effectiveStatus);
+
+  const lines = [
+    `执行 \`${command}\` 被拒绝（HTTP ${httpStatus} / ${code}）。`,
+    `当前本机 CLI 账号：${accountText}`,
+    `当前空间：${spaceText}`,
+  ];
+  if (resource) lines.push(`目标资源：${resource}`);
+  if (webId) lines.push(`目标 Web 应用：${webId}`);
+  if (requestId) lines.push(`Request ID：${requestId}`);
+  lines.push(
+    '',
+    '原因：当前登录的 Tiana CLI 账号或空间角色无权执行此操作（常见原因：本机 CLI 登录账号与资源所属账号不一致，或在当前空间缺少管理权限）。',
+    '下一步指引：',
+    '1. 运行 `tiana status` 核对当前本机 CLI 账号与空间。',
+    '2. 若账号不一致，请先运行 `tiana logout && tiana login` 切换为资源所属账号后重试。',
+    '3. 若确认是同一账号，请联系空间管理员确认角色权限，或通过 `tiana space list` / `tiana space switch <spaceId>` 确认空间后重试。',
+  );
+
+  const wrapped = new Error(lines.join('\n'));
+  wrapped.code = err?.tianaCode || 'TIANA_FORBIDDEN';
+  if (err?.tianaCode) wrapped.tianaCode = err.tianaCode;
+  wrapped.httpStatus = httpStatus;
+  if (requestId) wrapped.requestId = requestId;
+  if (!credentialCommand && err?.tianaMessage) wrapped.tianaMessage = err.tianaMessage;
+  wrapped.status = 403;
+  return wrapped;
+}
+
+function formatOwnershipError(baseMsg, { webId, status, webApp, binding, reason, err } = {}) {
+  const accountText = formatTianaAccount(status, { includeUserId: true });
+  const spaceText = formatTianaSpace(status);
   if (!reason) {
     if (binding?.canManage === false) reason = '`tiana web functions get` returned `can_manage: false`.';
     else if (binding?.canManage == null) reason = '`tiana web functions get` did not return `can_manage`.';
     else reason = '`tiana web functions get` did not return `can_manage: true`.';
   }
 
-  return [
+  const lines = [
     baseMsg,
-    `Current Tiana CLI account: ${account.join(' / ') || '(unknown)'}`,
-    `Current Tiana space: ${currentSpace.join(' / ') || '(unknown)'}`,
+    `Current Tiana CLI account: ${accountText}`,
+    `Current Tiana space: ${spaceText}`,
     `Target Web app: ${webId || webApp?.id || '(unknown)'}`,
     `Reason: ${reason}`,
+  ];
+  if (err && (isTianaForbiddenError(err) || err.tianaCode || err.requestId)) {
+    const statusPart = err.httpStatus ? `HTTP ${err.httpStatus}` : (isTianaForbiddenError(err) ? 'HTTP 403' : '');
+    const codePart = err.tianaCode || (isTianaForbiddenError(err) ? 'FORBIDDEN' : '');
+    const errSummary = [statusPart, codePart].filter(Boolean).join(' / ');
+    if (errSummary) lines.push(`Tiana error: ${errSummary}`);
+    if (err.requestId) lines.push(`Request ID: ${err.requestId}`);
+  }
+  lines.push(
     '',
     'Run `tiana status` to verify the active Tiana CLI account and space.',
     'If you are signed in with a different account, run `tiana logout && tiana login` and sign in as the Web app owner.',
     'If you are in a different space, run `tiana space list`, then `tiana space switch <spaceId>`, or pass `--space <spaceId>` to `dsh-remote connect`.',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 function webAppNotFound(webId, status) {
@@ -576,20 +1022,42 @@ function webAppNotFound(webId, status) {
 async function listWebAppsForOwnership(webId, status, cliOpts) {
   try {
     return await listTianaWebApps(cliOpts);
-  } catch {
-    throw new Error(formatOwnershipError(`Could not look up Web app "${webId}" in the current Tiana space.`, {
-      webId, status, reason: '`tiana web list` failed to retrieve Web apps in the active space.',
+  } catch (err) {
+    const wrapped = new Error(formatOwnershipError(`Could not look up Web app "${webId}" in the current Tiana space.`, {
+      webId,
+      status,
+      reason: '`tiana web list` failed to retrieve Web apps in the active space.',
+      err,
     }));
+    if (err?.httpStatus) wrapped.httpStatus = err.httpStatus;
+    if (err?.tianaCode) wrapped.tianaCode = err.tianaCode;
+    if (err?.requestId) wrapped.requestId = err.requestId;
+    if (isTianaForbiddenError(err)) {
+      wrapped.status = 403;
+      wrapped.code = err?.tianaCode || 'TIANA_FORBIDDEN';
+    }
+    throw wrapped;
   }
 }
 
 async function getWebBindingForOwnership(webId, status, cliOpts) {
   try {
     return await getWebFunctionBinding(webId, cliOpts);
-  } catch {
-    throw new Error(formatOwnershipError(WEB_APP_OWNERSHIP_ERROR, {
-      webId, status, reason: '`tiana web functions get` failed to retrieve the app’s management permissions.',
+  } catch (err) {
+    const wrapped = new Error(formatOwnershipError(WEB_APP_OWNERSHIP_ERROR, {
+      webId,
+      status,
+      reason: '`tiana web functions get` failed to retrieve the app’s management permissions.',
+      err,
     }));
+    if (err?.httpStatus) wrapped.httpStatus = err.httpStatus;
+    if (err?.tianaCode) wrapped.tianaCode = err.tianaCode;
+    if (err?.requestId) wrapped.requestId = err.requestId;
+    if (isTianaForbiddenError(err)) {
+      wrapped.status = 403;
+      wrapped.code = err?.tianaCode || 'TIANA_FORBIDDEN';
+    }
+    throw wrapped;
   }
 }
 
@@ -783,6 +1251,15 @@ async function ensureWebFunctionBinding(webId, functionId, {
         return rechecked.functionInstanceIds[0];
       }
     }
+    if (isTianaForbiddenError(err)) {
+      throw await buildForbiddenStepError(err, {
+        command: `tiana web functions set ${webId}`,
+        resource: `Web ${webId} -> Function ${functionId}`,
+        webId,
+        status,
+        cliOpts,
+      });
+    }
     throw err;
   }
 }
@@ -858,7 +1335,21 @@ export async function bindTianaRemoteWeb(options = {}) {
   let status = await getTianaStatus(cliOpts);
   if (options.spaceId && status.user.tenant_id !== options.spaceId) {
     log(`[dsh-remote] Switching Tiana space to ${options.spaceId}...`);
-    await runTianaJSON(['space', 'switch', options.spaceId, '--json'], cliOpts);
+    try {
+      await runTianaJSON(['space', 'switch', options.spaceId, '--json'], cliOpts);
+    } catch (err) {
+      if (isTianaForbiddenError(err)) {
+        throw await buildSpaceSwitchForbiddenError(err, {
+          spaceId: options.spaceId,
+          webId,
+          status,
+          rebind: Boolean(options.rebind),
+          forceRebind: Boolean(options.forceRebind),
+          cliOpts,
+        });
+      }
+      throw err;
+    }
     status = await getTianaStatus(cliOpts);
   }
   if (!status?.user?.user_id || !status?.user?.tenant_id) {
@@ -910,16 +1401,18 @@ export async function bindTianaRemoteWeb(options = {}) {
   let fnId = binding.functionInstanceIds[0] || '';
   let fnShown = null;
   if (fnId) {
-    fnShown = await runTianaJSON(['function', 'show', fnId, '--json'], cliOpts);
+    fnShown = await showRelayFunction(fnId, { status, webId, ...cliOpts });
   } else {
     log(`[dsh-remote] Web app ${webId} has no bound Relay Function; provisioning generic relay-go...`);
     const created = await ensureRelayFunction({
       functionName: options.functionName || DEFAULT_FUNCTION_NAME,
+      status,
+      webId,
       log,
       ...cliOpts,
     });
     fnId = created.instance.id;
-    fnShown = await syncAndPublishRelayFunction(fnId, webId, { log, ...cliOpts });
+    fnShown = await syncAndPublishRelayFunction(fnId, webId, { status, log, ...cliOpts });
     const boundFnId = await ensureWebFunctionBinding(webId, fnId, {
       adoptExisting: true,
       revalidate: revalidateBindAuth,
@@ -929,7 +1422,7 @@ export async function bindTianaRemoteWeb(options = {}) {
     });
     if (boundFnId !== fnId) {
       fnId = boundFnId;
-      fnShown = await runTianaJSON(['function', 'show', fnId, '--json'], cliOpts);
+      fnShown = await showRelayFunction(fnId, { status, webId, ...cliOpts });
     }
   }
 
@@ -949,7 +1442,7 @@ export async function bindTianaRemoteWeb(options = {}) {
   let tokenInfo = await ensureHostToken(
     tokenSeedState,
     fnId,
-    { rotateToken: Boolean(options.rotateToken), log, ...cliOpts },
+    { rotateToken: Boolean(options.rotateToken), status, webId, log, ...cliOpts },
   );
   let mintedNewToken = tokenInfo.token !== seedToken?.token;
 
@@ -985,11 +1478,13 @@ export async function bindTianaRemoteWeb(options = {}) {
     }
     if (activeFnId && activeFnId !== fnId) {
       fnId = activeFnId;
-      fnShown = await runTianaJSON(['function', 'show', fnId, '--json'], cliOpts);
+      fnShown = await showRelayFunction(fnId, { status, webId, ...cliOpts });
       fnUrl = validateRelayFunctionShown(fnShown);
       preLockToken = prevState.function?.id === fnId ? prevState.function : null;
       tokenInfo = await ensureHostToken(prevState, fnId, {
         rotateToken: Boolean(options.rotateToken),
+        status,
+        webId,
         log,
         ...cliOpts,
       });
@@ -1002,7 +1497,7 @@ export async function bindTianaRemoteWeb(options = {}) {
     if (!/^[a-z0-9_-]{1,48}$/u.test(hostId)) throw new Error('Invalid host ID');
 
     // Strictly read fresh existing function parameters (NEVER swallow failure!)
-    const existingParams = await getFunctionParameters(fnId, cliOpts);
+    const existingParams = await getFunctionParameters(fnId, { status, webId, ...cliOpts });
     const existingPolicy = parsePolicyFromParameters(existingParams);
 
     const pendingBind = prevState.pendingBind?.functionId === fnId && prevState.pendingBind?.webId === webId
@@ -1157,7 +1652,7 @@ export async function bindTianaRemoteWeb(options = {}) {
       webId,
       origin: webUrl.origin,
     });
-    await updateRemotePolicy(fnId, policy, { existingParams, log, ...cliOpts });
+    await updateRemotePolicy(fnId, policy, { existingParams, status, webId, log, ...cliOpts });
 
     // Step E: Atomically commit final state under lock, merging concurrent settings, key rotation, and token renewals
     const committedState = await withStateLock(() => {
@@ -1370,7 +1865,7 @@ export async function provisionTianaRemote(options = {}) {
     await checkpoint({ webId, owner, hostId, registrationKey, e2ee });
 
     const { instance: fnInstance } = await ensureRelayFunction({
-      functionName, functionId: prevState.function?.id || pending.functionId, log, ...cliOpts,
+      functionName, functionId: prevState.function?.id || pending.functionId, status, webId, log, ...cliOpts,
     });
     if (!fnInstance?.id) throw new Error('Missing configured Function ID');
     await checkpoint({ functionId: fnInstance.id });
@@ -1409,7 +1904,7 @@ export async function provisionTianaRemote(options = {}) {
       webEndpoint = webUrl.href;
 
       const fnShown = await syncAndPublishRelayFunction(fnInstance.id, webId, {
-        forcePublish: Boolean(options.forcePublish), log, ...cliOpts,
+        forcePublish: Boolean(options.forcePublish), status, log, ...cliOpts,
       });
       const fnUrl = fnShown?.instance?.connection?.url || fnShown?.instance?.url || fnInstance.connection?.url || fnInstance.url;
       if (!fnUrl || new URL(fnUrl).protocol !== 'https:') throw new Error('Function requires an HTTPS endpoint');
@@ -1420,7 +1915,7 @@ export async function provisionTianaRemote(options = {}) {
         ? prevState
         : (pending.tokenInfo ? { function: pending.tokenInfo } : prevState);
       const tokenInfo = await ensureHostToken(tokenSeedState, fnInstance.id, {
-        rotateToken: Boolean(options.rotateToken), log, ...cliOpts,
+        rotateToken: Boolean(options.rotateToken), status, webId, log, ...cliOpts,
       });
       await checkpoint({ tokenInfo: { ...tokenInfo, id: fnInstance.id } });
 
@@ -1444,7 +1939,7 @@ export async function provisionTianaRemote(options = {}) {
       webUrl = freshAuth.webUrl;
       webEndpoint = webUrl.href;
 
-      const existingParams = await getFunctionParameters(fnInstance.id, cliOpts);
+      const existingParams = await getFunctionParameters(fnInstance.id, { status, webId, ...cliOpts });
       const existingPolicy = parsePolicyFromParameters(existingParams);
 
       // Cloud online preflight before mutating DSH_REMOTE_POLICY
@@ -1509,7 +2004,7 @@ export async function provisionTianaRemote(options = {}) {
         origin: webUrl.origin,
       });
 
-      await updateRemotePolicy(fnInstance.id, policy, { existingParams, log, ...cliOpts });
+      await updateRemotePolicy(fnInstance.id, policy, { existingParams, status, webId, log, ...cliOpts });
       await ensureWebFunctionBinding(webId, fnInstance.id, {
         initialBinding: freshAuth.binding,
         requireManage: freshAuth.requiresManageProof,
@@ -1518,12 +2013,26 @@ export async function provisionTianaRemote(options = {}) {
         ...cliOpts,
       });
 
-      const publishResult = await runTianaJSON([
-        'web', 'publish',
-        '--dir', distTemp,
-        '--json',
-        webId,
-      ], { ...cliOpts, timeoutMs: 240_000 });
+      let publishResult;
+      try {
+        publishResult = await runTianaJSON([
+          'web', 'publish',
+          '--dir', distTemp,
+          '--json',
+          webId,
+        ], { ...cliOpts, timeoutMs: 240_000 });
+      } catch (err) {
+        if (isTianaForbiddenError(err)) {
+          throw await buildForbiddenStepError(err, {
+            command: `tiana web publish ${webId}`,
+            resource: `Web ${webId}`,
+            webId,
+            status,
+            cliOpts,
+          });
+        }
+        throw err;
+      }
 
       const nextState = await withStateLock(() => {
         const latestRaw = loadRemoteState(statePath) || prevState;
@@ -1606,7 +2115,19 @@ export async function republishWebShell(state, { log = console.log, ...cliOpts }
       },
     });
     log(`[dsh-remote] Rebuilt .tweb bundle (${built.fileCount} files, ${(built.totalBytes / 1024).toFixed(1)} KiB). Publishing...`);
-    return await runTianaJSON(['web', 'publish', '--dir', distTemp, '--json', webId], { ...cliOpts, timeoutMs: 240_000 });
+    try {
+      return await runTianaJSON(['web', 'publish', '--dir', distTemp, '--json', webId], { ...cliOpts, timeoutMs: 240_000 });
+    } catch (err) {
+      if (isTianaForbiddenError(err)) {
+        throw await buildForbiddenStepError(err, {
+          command: `tiana web publish ${webId}`,
+          resource: `Web ${webId}`,
+          webId,
+          cliOpts,
+        });
+      }
+      throw err;
+    }
   } finally {
     rmSync(distTemp, { recursive: true, force: true });
   }

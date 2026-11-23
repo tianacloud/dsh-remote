@@ -724,16 +724,19 @@
       .dshr-notice {
         padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;
         background: rgba(59, 130, 246, 0.12); border: 1px solid rgba(96, 165, 250, 0.35);
+        white-space: pre-wrap; overflow-wrap: anywhere;
       }
       .dshr-warn {
         padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;
         background: rgba(245, 158, 11, 0.14); border: 1px solid rgba(251, 191, 36, 0.45);
+        white-space: pre-wrap; overflow-wrap: anywhere;
       }
       .dshr-err {
-        padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.45;
+        padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5;
         background: rgba(220, 38, 38, 0.14);
         border: 1px solid rgba(248, 113, 113, 0.45);
         color: var(--dsw-alias-state-error-primary, #f87171);
+        white-space: pre-wrap; overflow-wrap: anywhere;
       }
       .dshr-switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; font-weight: 500; }
       dialog.dshr-dialog {
@@ -1261,7 +1264,9 @@
             headers: { 'content-type': 'application/json' },
             body: '{}',
           });
+          const data = await resp.json().catch(() => ({}));
           if (resp.ok) setToast(t('repaired'));
+          else setToast(data.error || `Repair failed (HTTP ${resp.status})`);
         } finally {
           setBusy('');
         }
@@ -1322,7 +1327,7 @@
               provisionStatus.running ? t('provisionRunning') : (provisionStatus.step === 'done' ? t('provisionDone') : `Status: ${provisionStatus.step}`),
             ),
           ),
-          provisionStatus.error && h('div', { className: 'dshr-err' }, provisionStatus.error),
+          provisionStatus.error && h('div', { className: 'dshr-err', id: 'dshr-provision-error', role: 'alert' }, provisionStatus.error),
           isActiveHostConflict && takeoverTarget && h('div', { className: 'dshr-row' },
             h('button', {
               type: 'button',
@@ -1816,8 +1821,8 @@
                     h('span', { className: 'dshr-badge' },
                       `${overview?.web?.name || 'dsh-tiana-remote'} (${overview?.web?.id || '—'})`,
                     ),
-                    (overview?.owner?.email || overview?.owner?.displayName || overview?.owner?.spaceName) && h('span', { className: 'dshr-badge' },
-                      [overview?.owner?.email || overview?.owner?.displayName, overview?.owner?.spaceName].filter(Boolean).join(' · '),
+                    (overview?.owner?.email || overview?.owner?.displayName || overview?.owner?.userId || overview?.owner?.spaceName) && h('span', { className: 'dshr-badge' },
+                      [overview?.owner?.email || overview?.owner?.displayName || overview?.owner?.userId, overview?.owner?.spaceName].filter(Boolean).join(' · '),
                     ),
                   ),
                   h('div', { className: 'dshr-action-desc', id: 'dshr-unbind-desc' }, t('unbindDesc')),
@@ -1913,7 +1918,7 @@
             h('h3', { id: 'dshr-unbind-title', style: { margin: '0 0 8px', fontSize: 16 } }, t('unbindConfirmTitle')),
             overview?.web?.id && h('p', {
               style: { margin: '0 0 8px', fontSize: 13, fontWeight: 600 },
-            }, `${overview.web.name || 'dsh-tiana-remote'} (${overview.web.id})${overview?.owner?.email || overview?.owner?.spaceName ? ` · ${[overview.owner.email, overview.owner.spaceName].filter(Boolean).join(' / ')}` : ''}`),
+            }, `${overview.web.name || 'dsh-tiana-remote'} (${overview.web.id})${overview?.owner?.email || overview?.owner?.displayName || overview?.owner?.userId || overview?.owner?.spaceName ? ` · ${[overview.owner.email || overview.owner.displayName || overview.owner.userId, overview.owner.spaceName].filter(Boolean).join(' / ')}` : ''}`),
             h('p', { style: { margin: '0 0 16px', fontSize: 13, lineHeight: 1.5, opacity: 0.85 } }, t('unbindConfirmBody')),
             h('form', { method: 'dialog', className: 'dshr-row', style: { justifyContent: 'flex-end' } },
               h('button', { type: 'submit', value: 'cancel', autoFocus: true, className: 'dshr-btn', id: 'dshr-unbind-cancel' }, t('cancel')),

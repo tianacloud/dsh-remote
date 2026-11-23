@@ -20,7 +20,7 @@ import {
   saveRemoteState,
   withStateLock,
 } from './src/state.js';
-import { clearRemotePolicyIfOwned, getTianaStatus, provisionTianaRemote } from './src/tiana-cli.js';
+import { clearRemotePolicyIfOwned, formatTianaAccount, getTianaStatus, provisionTianaRemote } from './src/tiana-cli.js';
 
 function parseArgs(argv) {
   const positionals = [];
@@ -127,7 +127,7 @@ async function cmdSetup(flags) {
   console.log('');
   console.log('============================================================');
   console.log('DSH Remote provisioning complete!');
-  console.log(`  Owner      : ${state.owner?.email || state.owner?.userId}`);
+  console.log(`  Owner      : ${formatTianaAccount(state.owner, { includeUserId: false })}`);
   console.log(`  Space      : ${state.owner?.spaceName || state.owner?.tenantId}`);
   console.log(`  Host ID    : ${state.host?.hostId} (${state.host?.hostName})`);
   console.log(`  Relay Fn   : ${state.function?.id} -> ${state.function?.url}`);
@@ -195,10 +195,11 @@ async function cmdStatus(flags) {
     tiana: tianaStatus?.logged_in
       ? {
           loggedIn: true,
-          email: tianaStatus.user?.email,
-          userId: tianaStatus.user?.user_id,
-          tenantId: tianaStatus.user?.tenant_id,
-          space: tianaStatus.space?.display_name,
+          displayName: tianaStatus.user?.display_name || '',
+          email: tianaStatus.user?.email || '',
+          userId: tianaStatus.user?.user_id || '',
+          tenantId: tianaStatus.user?.tenant_id || '',
+          space: tianaStatus.space?.display_name || '',
         }
       : tianaStatus,
     statePath: defaultStatePath(),
@@ -212,7 +213,11 @@ async function cmdStatus(flags) {
     return;
   }
 
-  console.log('Tiana Login :', summary.tiana?.loggedIn ? `${summary.tiana.email} (${summary.tiana.space})` : 'NOT LOGGED IN');
+  const tianaAccountLabel = summary.tiana?.loggedIn
+    ? formatTianaAccount(summary.tiana, { includeUserId: false })
+    : '';
+  const tianaSpaceLabel = summary.tiana?.space || summary.tiana?.tenantId || '(unknown)';
+  console.log('Tiana Login :', summary.tiana?.loggedIn ? `${tianaAccountLabel} (${tianaSpaceLabel})` : 'NOT LOGGED IN');
   if (!configured) {
     console.log('Remote State: Not bound yet. Run `dsh-remote connect --app <appId>` or `dsh-remote setup`.');
     if (redactedState?.lastBound?.webId) {
