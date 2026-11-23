@@ -54,6 +54,13 @@ test('packMarketTemplate builds a valid unified install.zip without mutating rel
     assert.equal(siteConfig.functionId, '__TIANA_FUNCTION_RELAY_8c4e2a19__');
     assert.equal(siteConfig.webId, '__TIANA_WEB_ID_5f3b9d02__');
 
+    // Showcase preview must use the updated user-facing sync/repair cloud page copy & explanation
+    const previewHtml = outer.files['showcase/preview.html'].toString('utf8');
+    assert.ok(previewHtml.includes('同步/修复云端访问页'), 'preview.html must display updated sync/repair cloud page button copy');
+    assert.ok(previewHtml.includes('id="desc-repair-shell"'), 'preview.html must include structured explanation for sync/repair cloud page');
+    assert.ok(!previewHtml.includes('重推静态壳层'), 'preview.html must not contain legacy static shell button copy');
+    assert.ok(!previewHtml.includes('静态壳层'), 'preview.html must not contain legacy static shell copy');
+
     // Extracted repositories/app from source.zip builds cleanly via build.mjs
     const extractRoot = path.join(workDir, 'extracted');
     for (const [rel, bytes] of Object.entries(source.files)) {

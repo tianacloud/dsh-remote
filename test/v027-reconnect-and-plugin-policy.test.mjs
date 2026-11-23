@@ -743,8 +743,11 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.match(collectText(unbindDescEn), /remains active/i);
   assert.match(collectText(unbindDescEn), /dsh-tiana-remote.*host computer/i);
 
-  // 2. Local mode: renders bridgeConflict banner and renders NO plugin policy card
-  const localMount = mountPanel('local', async () => new Response(JSON.stringify({
+  // 2. Local mode (zh-CN): renders bridgeConflict banner, renders NO plugin policy card,
+  //    renders structured sync/repair cloud page action row with clear description, and invokes /admin/repair
+  let repairResolve = null;
+  let repairCalls = 0;
+  const localOverviewPayload = {
     ok: true,
     configured: true,
     enabled: true,
@@ -754,7 +757,16 @@ test('client.js omits plugin access policy UI in both remote and local views whi
     bridge: { relayConnected: false, hostConflict: true, sessions: [] },
     bridgeConflict: { ownerPid: 2495419, ownerOrigin: 'https://workstation.example.test:3080' },
     network: { p2pEnabled: true, stunUrls: [] },
-  }), { status: 200 }));
+  };
+  const localMount = mountPanel('local', async (url, opts) => {
+    if (url === '/api/tiana-remote/admin/repair' && opts?.method === 'POST') {
+      repairCalls += 1;
+      return new Promise((resolve) => {
+        repairResolve = () => resolve(new Response(JSON.stringify({ ok: true, repaired: true }), { status: 200 }));
+      });
+    }
+    return new Response(JSON.stringify(localOverviewPayload), { status: 200 });
+  }, { language: 'zh-CN' });
 
   localMount.render();
   await localMount.flush();
@@ -763,4 +775,64 @@ test('client.js omits plugin access policy UI in both remote and local views whi
   assert.ok(conflictBanner, 'local view must render bridgeConflict alert banner');
   assert.ok(collectText(conflictBanner).includes('2495419'));
   assert.equal(findById(lTree, 'dshr-plugin-access-card'), null, 'local view must NOT render plugin access card');
+
+  const repairActionZh = findById(lTree, 'dshr-local-action-repair');
+  const repairBtnZh = findById(lTree, 'dshr-repair-btn');
+  const repairDescZh = findById(lTree, 'dshr-repair-desc');
+  assert.ok(repairActionZh && repairBtnZh && repairDescZh, 'local zh view must render structured sync/repair action row');
+  assert.equal(collectText(repairBtnZh), '同步/修复云端访问页');
+  assert.equal(repairBtnZh.props['aria-describedby'], 'dshr-repair-desc');
+  assert.match(collectText(repairDescZh), /升级本机插件后.*云端访问页/u);
+  assert.match(collectText(repairDescZh), /不影响已有配对密钥和本机数据/u);
+  assert.ok(!collectText(lTree).includes('重推静态壳层'), 'local zh view must not contain legacy static shell copy');
+
+  // Verify busy & completed states when invoking handleRepair()
+  repairBtnZh.props.onClick();
+  const lTreeBusyZh = localMount.render();
+  const repairBtnBusyZh = findById(lTreeBusyZh, 'dshr-repair-btn');
+  assert.equal(repairCalls, 1, 'clicking #dshr-repair-btn must POST /api/tiana-remote/admin/repair');
+  assert.equal(repairBtnBusyZh.props.disabled, true);
+  assert.equal(collectText(repairBtnBusyZh), '正在同步…');
+  repairResolve();
+  await new Promise((r) => setTimeout(r, 15));
+  const lTreeDoneZh = localMount.render();
+  assert.equal(collectText(findById(lTreeDoneZh, 'dshr-repair-btn')), '同步/修复云端访问页');
+  assert.ok(collectText(lTreeDoneZh).includes('云端访问页已同步'), 'local zh toast must announce cloud page synced');
+
+  // 2b. Local mode (en-US): verifies English sync/repair button, description, busy state, and toast
+  let repairEnResolve = null;
+  const localEnMount = mountPanel('local', async (url, opts) => {
+    if (url === '/api/tiana-remote/admin/repair' && opts?.method === 'POST') {
+      return new Promise((resolve) => {
+        repairEnResolve = () => resolve(new Response(JSON.stringify({ ok: true, repaired: true }), { status: 200 }));
+      });
+    }
+    return new Response(JSON.stringify(localOverviewPayload), { status: 200 });
+  }, { language: 'en-US' });
+
+  localEnMount.render();
+  await localEnMount.flush();
+  const lTreeEn = localEnMount.render();
+  const repairBtnEn = findById(lTreeEn, 'dshr-repair-btn');
+  const repairDescEn = findById(lTreeEn, 'dshr-repair-desc');
+  assert.ok(repairBtnEn && repairDescEn, 'local en view must render sync/repair button and description');
+  assert.equal(collectText(repairBtnEn), 'Sync / Repair Cloud Page');
+  assert.equal(repairBtnEn.props['aria-describedby'], 'dshr-repair-desc');
+  assert.match(collectText(repairDescEn), /upgrading this plugin/i);
+  assert.match(collectText(repairDescEn), /without changing your pairing key or local data/i);
+  assert.ok(!collectText(lTreeEn).includes('Static Shell'), 'local en view must not contain legacy Static Shell copy');
+
+  repairBtnEn.props.onClick();
+  const lTreeBusyEn = localEnMount.render();
+  assert.equal(collectText(findById(lTreeBusyEn, 'dshr-repair-btn')), 'Syncing…');
+  repairEnResolve();
+  await new Promise((r) => setTimeout(r, 15));
+  const lTreeDoneEn = localEnMount.render();
+  assert.equal(collectText(findById(lTreeDoneEn, 'dshr-repair-btn')), 'Sync / Repair Cloud Page');
+  assert.ok(collectText(lTreeDoneEn).includes('Cloud page synced'), 'local en toast must announce cloud page synced');
+
+  // 3. Static copy hygiene guard across client.js
+  assert.ok(!clientCode.includes('重推静态壳层修复'), 'client.js must not retain old Chinese repair button copy');
+  assert.ok(!clientCode.includes('静态壳层'), 'client.js must not retain static shell user-facing copy');
+  assert.ok(!clientCode.includes('Repair / Republish Static Shell'), 'client.js must not retain old English repair button copy');
 });
